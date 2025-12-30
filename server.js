@@ -1,12 +1,11 @@
 const http = require("http");
 const express = require("express");
-const cors = require("cors");
-
-const { Server, Room } = require("colyseus");
+const { Server } = require("colyseus");
 const { WebSocketTransport } = require("@colyseus/ws-transport");
+
+const { Room } = require("colyseus");
 const { Schema, type, MapSchema } = require("@colyseus/schema");
 
-// ---- Schema ----
 class Player extends Schema {
   constructor() {
     super();
@@ -31,7 +30,6 @@ class State extends Schema {
 }
 type({ map: Player })(State.prototype, "players");
 
-// ---- Room ----
 class BattleRoom extends Room {
   onCreate() {
     this.setState(new State());
@@ -51,17 +49,10 @@ class BattleRoom extends Room {
     });
   }
 
-  onJoin(client, options) {
+  onJoin(client) {
     const p = new Player();
     p.x = 100 + Math.floor(Math.random() * 500);
     p.y = 100 + Math.floor(Math.random() * 300);
-
-    // If client provided a name in join options, use it
-    if (options && options.name) {
-      const clean = String(options.name).slice(0, 16);
-      p.name = clean || "Player";
-    }
-
     this.state.players.set(client.sessionId, p);
   }
 
@@ -70,28 +61,27 @@ class BattleRoom extends Room {
   }
 }
 
-// ---- App ----
 const app = express();
-app.use(express.json());
 
-// IMPORTANT for GitHub Pages -> Railway cross-origin matchmake requests
-app.use(cors({ origin: "*", methods: ["GET", "POST", "OPTIONS"], allowedHeaders: ["Content-Type"] }));
-app.options("*", cors());
-
+// Health check
 app.get("/", (_, res) => res.status(200).send("EvoBlasters server running"));
-app.get("/health", (_, res) => res.status(200).json({ ok: true }));
 
+// IMPORTANT: create ONE http server and hand it to Colyseus transport
 const server = http.createServer(app);
 
 const gameServer = new Server({
-  transport: new WebSocketTransport({ server }),
+  transport: new WebSocketTransport({
+    server,
+    // Railway/proxies sometimes need this:
+    pingInterval: 5000,
+    pingMaxRetries: 3,
+  }),
 });
 
 gameServer.define("battle", BattleRoom);
 
-// ✅ This is what exposes /matchmake/* endpoints on the same Express app
-gameServer.attach({ app });
-
-// Railway provides PORT
-const PORT = Number(process.env.PORT || 2567);
-server.listen(PORT, () => console.log("listening on", PORT));
+// IMPORTANT: listen on the SAME server Colyseus is attached to
+const PORT = Number(process.env.PORT || 8080);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log("listening on", PORT);
+});
