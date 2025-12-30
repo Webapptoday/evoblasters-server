@@ -1,9 +1,6 @@
-// server.js (evoblasters-server repo) — UPDATED
-
 const http = require("http");
 const express = require("express");
 const { Server, Room } = require("colyseus");
-const { WebSocketTransport } = require("@colyseus/ws-transport");
 const { Schema, type, MapSchema } = require("@colyseus/schema");
 
 class Player extends Schema {
@@ -62,20 +59,19 @@ class BattleRoom extends Room {
 }
 
 const app = express();
-app.get("/", (req, res) => res.status(200).send("OK"));
+app.use(express.json());
+
+// Health check
+app.get("/", (_, res) => res.status(200).send("EvoBlasters server running"));
 
 const server = http.createServer(app);
 
-const gameServer = new Server({
-  transport: new WebSocketTransport({ server }),
-});
-
+// IMPORTANT: pass the http server to Colyseus so it mounts /matchmake routes correctly
+const gameServer = new Server({ server });
 gameServer.define("battle", BattleRoom);
 
-// Railway provides PORT — default to 8080 for local dev
-const PORT = Number(process.env.PORT || 8080);
+const PORT = process.env.PORT || 2567;
 
-// ✅ IMPORTANT: use gameServer.listen, not server.listen
+// IMPORTANT: use gameServer.listen (not server.listen)
 gameServer.listen(PORT);
-
-console.log("Server listening on port", PORT);
+console.log("Colyseus listening on", PORT);
