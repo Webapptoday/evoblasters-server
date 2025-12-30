@@ -1,8 +1,12 @@
 const http = require("http");
 const express = require("express");
+const cors = require("cors");
+
 const { Server, Room } = require("colyseus");
+const { WebSocketTransport } = require("@colyseus/ws-transport");
 const { Schema, type, MapSchema } = require("@colyseus/schema");
 
+// ---- Schema ----
 class Player extends Schema {
   constructor() {
     super();
@@ -27,6 +31,7 @@ class State extends Schema {
 }
 type({ map: Player })(State.prototype, "players");
 
+// ---- Room ----
 class BattleRoom extends Room {
   onCreate() {
     this.setState(new State());
@@ -46,10 +51,17 @@ class BattleRoom extends Room {
     });
   }
 
-  onJoin(client) {
+  onJoin(client, options) {
     const p = new Player();
     p.x = 100 + Math.floor(Math.random() * 500);
     p.y = 100 + Math.floor(Math.random() * 300);
+
+    // If client provided a name in join options, use it
+    if (options && options.name) {
+      const clean = String(options.name).slice(0, 16);
+      p.name = clean || "Player";
+    }
+
     this.state.players.set(client.sessionId, p);
   }
 
@@ -58,20 +70,28 @@ class BattleRoom extends Room {
   }
 }
 
+// ---- App ----
 const app = express();
 app.use(express.json());
 
-// Health check
+// IMPORTANT for GitHub Pages -> Railway cross-origin matchmake requests
+app.use(cors({ origin: "*", methods: ["GET", "POST", "OPTIONS"], allowedHeaders: ["Content-Type"] }));
+app.options("*", cors());
+
 app.get("/", (_, res) => res.status(200).send("EvoBlasters server running"));
+app.get("/health", (_, res) => res.status(200).json({ ok: true }));
 
 const server = http.createServer(app);
 
-// IMPORTANT: pass the http server to Colyseus so it mounts /matchmake routes correctly
-const gameServer = new Server({ server });
+const gameServer = new Server({
+  transport: new WebSocketTransport({ server }),
+});
+
 gameServer.define("battle", BattleRoom);
 
-const PORT = process.env.PORT || 2567;
+// ✅ This is what exposes /matchmake/* endpoints on the same Express app
+gameServer.attach({ app });
 
-// IMPORTANT: use gameServer.listen (not server.listen)
-gameServer.listen(PORT);
-console.log("Colyseus listening on", PORT);
+// Railway provides PORT
+const PORT = Number(process.env.PORT || 2567);
+server.listen(PORT, () => console.log("listening on", PORT));
