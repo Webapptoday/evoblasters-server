@@ -1,4 +1,3 @@
-const http = require("http");
 const express = require("express");
 const { Server } = require("colyseus");
 const { WebSocketTransport } = require("@colyseus/ws-transport");
@@ -6,6 +5,9 @@ const { WebSocketTransport } = require("@colyseus/ws-transport");
 const { Room } = require("colyseus");
 const { Schema, type, MapSchema } = require("@colyseus/schema");
 
+/* =======================
+   Schema
+======================= */
 class Player extends Schema {
   constructor() {
     super();
@@ -30,6 +32,9 @@ class State extends Schema {
 }
 type({ map: Player })(State.prototype, "players");
 
+/* =======================
+   Room
+======================= */
 class BattleRoom extends Room {
   onCreate() {
     this.setState(new State());
@@ -49,10 +54,17 @@ class BattleRoom extends Room {
     });
   }
 
-  onJoin(client) {
+  onJoin(client, options) {
     const p = new Player();
     p.x = 100 + Math.floor(Math.random() * 500);
     p.y = 100 + Math.floor(Math.random() * 300);
+
+    // allow name passed during joinOrCreate({name})
+    if (options && typeof options.name === "string") {
+      const clean = options.name.slice(0, 16);
+      p.name = clean || "Player";
+    }
+
     this.state.players.set(client.sessionId, p);
   }
 
@@ -61,27 +73,25 @@ class BattleRoom extends Room {
   }
 }
 
+/* =======================
+   Server (IMPORTANT PART)
+======================= */
 const app = express();
-
-// Health check
-app.get("/", (_, res) => res.status(200).send("EvoBlasters server running"));
-
-// IMPORTANT: create ONE http server and hand it to Colyseus transport
-const server = http.createServer(app);
 
 const gameServer = new Server({
   transport: new WebSocketTransport({
-    server,
-    // Railway/proxies sometimes need this:
-    pingInterval: 5000,
-    pingMaxRetries: 3,
+    // Let Colyseus create/start the HTTP server via gameServer.listen
+    app,
   }),
 });
 
 gameServer.define("battle", BattleRoom);
 
-// IMPORTANT: listen on the SAME server Colyseus is attached to
-const PORT = Number(process.env.PORT || 8080);
-server.listen(PORT, "0.0.0.0", () => {
-  console.log("listening on", PORT);
-});
+// Health check
+app.get("/", (_, res) => res.send("EvoBlasters server running"));
+
+// ✅ This is the key fix:
+const PORT = process.env.PORT || 2567;
+gameServer.listen(PORT);
+
+console.log("Colyseus listening on", PORT);
