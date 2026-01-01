@@ -100,6 +100,23 @@ class BattleRoom extends Room {
       });
     });
 
+    /* ---- game start validation (must have 2+ players) ---- */
+    this.onMessage("start_game", (client, data) => {
+      const playerCount = this.state.players.size;
+      console.log("[SERVER] Game start requested by", client.sessionId, "players:", playerCount);
+
+      if (playerCount < 2) {
+        console.log("[SERVER] ❌ BLOCKED - Cannot start with", playerCount, "player(s). Need 2+");
+        this.send(client, "start_blocked", { 
+          message: `Need 2 players to start. Currently: ${playerCount}` 
+        });
+        return;
+      }
+
+      console.log("[SERVER] ✅ APPROVED - Starting game with", playerCount, "players");
+      this.broadcast("game_start", { timestamp: Date.now() });
+    });
+
     /* ---- shooting ---- */
     this.onMessage("shoot", (client, data) => {
       console.log("[SERVER] Received shoot from", client.sessionId, "data:", data);
