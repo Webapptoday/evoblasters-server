@@ -65,15 +65,23 @@ class BattleRoom extends Room {
 
     /* ---- shooting ---- */
     this.onMessage("shoot", (client, data) => {
+      console.log("[SERVER] Received shoot from", client.sessionId, "data:", data);
       const shooter = this.state.players.get(client.sessionId);
-      if (!shooter || !shooter.alive) return;
+      if (!shooter || !shooter.alive) {
+        console.log("[SERVER] Shooter not found or not alive");
+        return;
+      }
 
       const x = Number(data?.x);
       const y = Number(data?.y);
       const dx = Number(data?.dx);
       const dy = Number(data?.dy);
 
-      if (![x, y, dx, dy].every(Number.isFinite)) return;
+      console.log("[SERVER] Shoot values:", { x, y, dx, dy }, "All finite?", [x, y, dx, dy].every(Number.isFinite));
+      if (![x, y, dx, dy].every(Number.isFinite)) {
+        console.log("[SERVER] Invalid shoot data, returning");
+        return;
+      }
 
       // normalize direction
       const len = Math.hypot(dx, dy) || 1;
@@ -87,6 +95,7 @@ class BattleRoom extends Room {
       let hitId = null;
       let bestT = Infinity;
 
+      console.log("[SERVER] Checking", this.state.players.size - 1, "other players for hit");
       // simple hitscan ray
       for (const [id, p] of this.state.players.entries()) {
         if (id === client.sessionId) continue;
@@ -102,6 +111,8 @@ class BattleRoom extends Room {
         const py = y + diry * t;
         const dist = Math.hypot(p.x - px, p.y - py);
 
+        console.log("[SERVER] Player", id, "dist:", dist, "t:", t, "HIT?", dist <= HIT_RADIUS && t < bestT);
+
         if (dist <= HIT_RADIUS && t < bestT) {
           bestT = t;
           hitId = id;
@@ -114,9 +125,11 @@ class BattleRoom extends Room {
         const target = this.state.players.get(hitId);
         target.hp = Math.max(0, target.hp - DAMAGE);
         hitHp = target.hp;
+        console.log("[SERVER] HIT! Target", hitId, "HP now:", hitHp);
 
         if (target.hp <= 0) {
           target.alive = false;
+          console.log("[SERVER] Target', hitId, 'is dead, respawning in 2s");
 
           // respawn after 2s
           this.clock.setTimeout(() => {
@@ -124,11 +137,15 @@ class BattleRoom extends Room {
             target.alive = true;
             target.x = 100 + Math.random() * 500;
             target.y = 100 + Math.random() * 300;
+            console.log("[SERVER] Respawned', hitId);
           }, 2000);
         }
+      } else {
+        console.log("[SERVER] No hit detected");
       }
 
       // broadcast for visuals
+      console.log("[SERVER] Broadcasting shot to all players");
       this.broadcast("shot", {
         fromId: client.sessionId,
         x,
