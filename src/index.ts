@@ -59,7 +59,19 @@ class BattleRoom extends Room<State> {
 }
 
 const app = express();
-app.get("/", (_, res) => res.send("EvoBlasters Colyseus server running"));
+
+// ✅ Enable CORS for all origins
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+app.get("/", (_, res) => res.status(200).send("EvoBlasters Colyseus server running"));
 
 const server = http.createServer(app);
 const gameServer = new Server({
