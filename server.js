@@ -1,8 +1,14 @@
+const { Server } = require("colyseus");
+const { WebSocketTransport } = require("@colyseus/ws-transport");
 const express = require("express");
-const { createServer } = require("http");
+const http = require("http");
 
-const { Server, Room } = require("colyseus");
+const { Room } = require("colyseus");
 const { Schema, type, MapSchema } = require("@colyseus/schema");
+
+/* =======================
+   SCHEMAS
+======================= */
 
 class Player extends Schema {
   constructor() {
@@ -28,8 +34,14 @@ class State extends Schema {
 }
 type({ map: Player })(State.prototype, "players");
 
+/* =======================
+   ROOM
+======================= */
+
 class BattleRoom extends Room {
   onCreate() {
+    console.log("BattleRoom created");
+
     this.setState(new State());
 
     this.onMessage("move", (client, data) => {
@@ -42,38 +54,42 @@ class BattleRoom extends Room {
     this.onMessage("set_name", (client, data) => {
       const p = this.state.players.get(client.sessionId);
       if (!p) return;
-      const clean = String(data?.name ?? "Player").slice(0, 16);
-      p.name = clean || "Player";
+      p.name = String(data?.name ?? "Player").slice(0, 16);
     });
   }
 
   onJoin(client) {
+    console.log("Client joined:", client.sessionId);
     const p = new Player();
-    p.x = 100 + Math.floor(Math.random() * 500);
-    p.y = 100 + Math.floor(Math.random() * 300);
     this.state.players.set(client.sessionId, p);
   }
 
   onLeave(client) {
+    console.log("Client left:", client.sessionId);
     this.state.players.delete(client.sessionId);
   }
 }
 
-const app = express();
-app.use(express.json());
+/* =======================
+   SERVER (RAILWAY SAFE)
+======================= */
 
+const app = express();
 app.get("/", (_, res) => res.send("EvoBlasters server running"));
 
-const httpServer = createServer(app);
+const server = http.createServer(app);
 
-// ✅ Recommended Colyseus setup
 const gameServer = new Server({
-  server: httpServer,
+  transport: new WebSocketTransport({
+    server,
+    pingInterval: 5000,
+    pingMaxRetries: 3,
+  }),
 });
 
 gameServer.define("battle", BattleRoom);
 
-const PORT = process.env.PORT || 2567;
-gameServer.listen(PORT);
-
-console.log("listening on", PORT);
+const PORT = process.env.PORT;
+server.listen(PORT, () => {
+  console.log("Colyseus listening on port", PORT);
+});
