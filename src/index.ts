@@ -19,6 +19,7 @@ class State extends Schema {
 
 class BattleRoom extends Room<State> {
   onCreate() {
+    this.maxClients = 100; // ✅ allow up to 100 players per room
     this.setState(new State());
 
     this.onMessage("move", (client, data: { x: number; y: number }) => {

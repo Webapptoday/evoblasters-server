@@ -41,6 +41,7 @@ type({ map: Player })(State.prototype, "players");
 class BattleRoom extends Room {
   onCreate(options) {
     console.log("BattleRoom created");
+    this.maxClients = 100; // ✅ allow up to 100 players per room
     this.setState(new State());
 
     // smoother updates
