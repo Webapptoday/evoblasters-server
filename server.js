@@ -129,7 +129,7 @@ class BattleRoom extends Room {
 
         if (target.hp <= 0) {
           target.alive = false;
-          console.log("[SERVER] Target', hitId, 'is dead, respawning in 2s");
+          console.log("[SERVER] Target", hitId, "is dead, respawning in 2s");
 
           // respawn after 2s
           this.clock.setTimeout(() => {
@@ -137,7 +137,7 @@ class BattleRoom extends Room {
             target.alive = true;
             target.x = 100 + Math.random() * 500;
             target.y = 100 + Math.random() * 300;
-            console.log("[SERVER] Respawned', hitId);
+            console.log("[SERVER] Respawned", hitId);
           }, 2000);
         }
       } else {
