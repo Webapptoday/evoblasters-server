@@ -35,6 +35,71 @@ class State extends Schema {
 type({ map: Player })(State.prototype, "players");
 
 /* =========================
+   MATCHMAKING ROOM (Lobby)
+========================= */
+
+class MatchmakingRoom extends Room {
+  onCreate(options) {
+    console.log("[MATCHMAKING] Room created");
+    this.maxClients = 1000; // Hold many players waiting
+    
+    // Simple queue: array of waiting players
+    this.queue = [];
+    this.waitingPlayers = new Map();
+
+    this.onMessage("join_queue", (client, data) => {
+      console.log("[MATCHMAKING] Player", client.sessionId, "joining queue:", data.name);
+      
+      this.waitingPlayers.set(client.sessionId, {
+        id: client.sessionId,
+        name: data.name || "Player",
+        joinedAt: Date.now(),
+      });
+
+      this.queue.push(client.sessionId);
+
+      // ✅ Check if we have 2+ players to form a match
+      this.tryCreateMatch();
+    });
+  }
+
+  tryCreateMatch() {
+    if (this.queue.length >= 2) {
+      // Take first 2 from queue
+      const p1Id = this.queue.shift();
+      const p2Id = this.queue.shift();
+      const p1 = this.waitingPlayers.get(p1Id);
+      const p2 = this.waitingPlayers.get(p2Id);
+
+      console.log("[MATCHMAKING] ✅ Match found!", p1.name, "vs", p2.name);
+
+      // Tell both players to join a specific battle room
+      const matchId = `match_${Date.now()}`;
+      this.send(p1Id, "match_found", { 
+        matchId, 
+        opponent: p2.name,
+        opponentId: p2Id,
+      });
+      this.send(p2Id, "match_found", { 
+        matchId, 
+        opponent: p1.name,
+        opponentId: p1Id,
+      });
+
+      // Clean up
+      this.waitingPlayers.delete(p1Id);
+      this.waitingPlayers.delete(p2Id);
+    }
+  }
+
+  onLeave(client) {
+    console.log("[MATCHMAKING] Player left:", client.sessionId);
+    this.queue = this.queue.filter(id => id !== client.sessionId);
+    this.waitingPlayers.delete(client.sessionId);
+  }
+}
+
+/* =========================
    ROOM
 ========================= */
 
@@ -259,6 +324,7 @@ const gameServer = new Server({
   transport: new WebSocketTransport({ server }),
 });
 
+gameServer.define("matchmaking", MatchmakingRoom);
 gameServer.define("battle", BattleRoom);
 
 const PORT = Number(process.env.PORT || 2567);
