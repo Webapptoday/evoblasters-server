@@ -41,11 +41,11 @@ type({ map: Player })(State.prototype, "players");
 class MatchmakingRoom extends Room {
   onCreate(options) {
     console.log("[MATCHMAKING] Room created");
-    this.maxClients = 1000; // Hold many players waiting
+    this.maxClients = 1000;
     
-    // Simple queue: array of waiting players
     this.queue = [];
     this.waitingPlayers = new Map();
+    this.pendingMatches = new Map();
 
     this.onMessage("join_queue", (client, data) => {
       console.log("[MATCHMAKING] Player", client.sessionId, "joining queue:", data.name);
@@ -57,24 +57,61 @@ class MatchmakingRoom extends Room {
       });
 
       this.queue.push(client.sessionId);
-
-      // ✅ Check if we have 2+ players to form a match
+      console.log("[MATCHMAKING] Queue size:", this.queue.length);
       this.tryCreateMatch();
+    });
+
+    this.onMessage("match_accepted", (client, data) => {
+      const { matchId } = data;
+      console.log("[MATCHMAKING] Player", client.sessionId, "accepted match", matchId);
+      
+      if (!this.pendingMatches.has(matchId)) {
+        console.log("[MATCHMAKING] Match", matchId, "not found");
+        return;
+      }
+
+      const match = this.pendingMatches.get(matchId);
+      match.acceptedCount = (match.acceptedCount || 0) + 1;
+
+      console.log("[MATCHMAKING] Match", matchId, "accepted:", match.acceptedCount, "/2");
+
+      if (match.acceptedCount === 2) {
+        console.log("[MATCHMAKING] ✅ Both players accepted! Sending game_start");
+        this.send(match.p1Id, "game_start", { matchId });
+        this.send(match.p2Id, "game_start", { matchId });
+        this.pendingMatches.delete(matchId);
+        this.waitingPlayers.delete(match.p1Id);
+        this.waitingPlayers.delete(match.p2Id);
+      }
     });
   }
 
   tryCreateMatch() {
     if (this.queue.length >= 2) {
-      // Take first 2 from queue
       const p1Id = this.queue.shift();
       const p2Id = this.queue.shift();
       const p1 = this.waitingPlayers.get(p1Id);
       const p2 = this.waitingPlayers.get(p2Id);
 
-      console.log("[MATCHMAKING] ✅ Match found!", p1.name, "vs", p2.name);
+      if (!p1 || !p2) {
+        console.log("[MATCHMAKING] ERROR: Player missing from waiting list");
+        return;
+      }
 
-      // Tell both players to join a specific battle room
-      const matchId = `match_${Date.now()}`;
+      const matchId = `match_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      this.pendingMatches.set(matchId, {
+        matchId,
+        p1Id,
+        p2Id,
+        p1Name: p1.name,
+        p2Name: p2.name,
+        createdAt: Date.now(),
+        acceptedCount: 0,
+      });
+
+      console.log("[MATCHMAKING] ✅ Match found!", p1.name, "vs", p2.name, "ID:", matchId);
+
       this.send(p1Id, "match_found", { 
         matchId, 
         opponent: p2.name,
@@ -86,9 +123,23 @@ class MatchmakingRoom extends Room {
         opponentId: p1Id,
       });
 
-      // Clean up
-      this.waitingPlayers.delete(p1Id);
-      this.waitingPlayers.delete(p2Id);
+      this.clock.setTimeout(() => {
+        if (this.pendingMatches.has(matchId)) {
+          console.log("[MATCHMAKING] Match", matchId, "timed out (no acceptance)");
+          const m = this.pendingMatches.get(matchId);
+          this.pendingMatches.delete(matchId);
+          
+          if (this.clients.find(c => c.sessionId === m.p1Id)) {
+            this.waitingPlayers.set(m.p1Id, { id: m.p1Id, name: m.p1Name, joinedAt: Date.now() });
+            this.queue.push(m.p1Id);
+          }
+          if (this.clients.find(c => c.sessionId === m.p2Id)) {
+            this.waitingPlayers.set(m.p2Id, { id: m.p2Id, name: m.p2Name, joinedAt: Date.now() });
+            this.queue.push(m.p2Id);
+          }
+          this.tryCreateMatch();
+        }
+      }, 30000);
     }
   }
 
@@ -96,6 +147,13 @@ class MatchmakingRoom extends Room {
     console.log("[MATCHMAKING] Player left:", client.sessionId);
     this.queue = this.queue.filter(id => id !== client.sessionId);
     this.waitingPlayers.delete(client.sessionId);
+    
+    for (const [matchId, match] of this.pendingMatches.entries()) {
+      if (match.p1Id === client.sessionId || match.p2Id === client.sessionId) {
+        console.log("[MATCHMAKING] Removing player from pending match", matchId);
+        this.pendingMatches.delete(matchId);
+      }
+    }
   }
 }
 
@@ -105,12 +163,25 @@ class MatchmakingRoom extends Room {
 
 class BattleRoom extends Room {
   onCreate(options) {
-    console.log("BattleRoom created");
-    this.maxClients = 100; // ✅ allow up to 100 players per room
+    console.log("[BATTLEROOM] Created, matchId:", options?.matchId);
+    this.maxClients = 2;
+    this.matchId = options?.matchId || "unknown";
+    this.readyPlayers = new Set();
+    this.gameStarted = false;
+    
     this.setState(new State());
-
-    // smoother updates
     this.setPatchRate(50);
+
+    this.onMessage("game_ready", (client, data) => {
+      console.log("[BATTLEROOM]", this.matchId, "Player", client.sessionId, "ready");
+      this.readyPlayers.add(client.sessionId);
+      
+      if (this.readyPlayers.size === 2 && !this.gameStarted) {
+        console.log("[BATTLEROOM]", this.matchId, "Both ready, starting game!");
+        this.gameStarted = true;
+        this.broadcast("game_can_start", { timestamp: Date.now() });
+      }
+    });
 
     /* ---- movement ---- */
     this.onMessage("move", (client, data) => {
@@ -278,10 +349,9 @@ class BattleRoom extends Room {
   }
 
   onJoin(client, options) {
-    console.log("Client joined:", client.sessionId);
+    console.log("[BATTLEROOM]", this.matchId, "Client joined:", client.sessionId);
 
     const p = new Player();
-
     const clean = String(options?.name ?? "Player").trim().slice(0, 16);
     p.name = clean || "Player";
 
@@ -289,6 +359,8 @@ class BattleRoom extends Room {
     p.y = 100 + Math.random() * 300;
 
     this.state.players.set(client.sessionId, p);
+    
+    console.log("[BATTLEROOM]", this.matchId, "Players in room:", this.state.players.size, "Expected: 2");
   }
 
   onLeave(client) {
