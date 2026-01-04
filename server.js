@@ -199,7 +199,61 @@ class BattleRoom extends Room {
       p.name = clean || "Player";
     });
 
-    /* ---- shooting with bullet collision ---- */
+    /* ---- hit detection (client-side hitscan validation) ---- */
+    this.onMessage("hit", (client, data) => {
+      console.log("[SERVER] Hit message from", client.sessionId, "data:", data);
+      const shooter = this.state.players.get(client.sessionId);
+      const target = this.state.players.get(data?.targetId);
+
+      if (!shooter || !target || !shooter.alive || !target.alive) {
+        console.log("[SERVER] Invalid hit (shooter or target dead/missing)");
+        return;
+      }
+
+      const dmg = Math.max(1, Math.min(50, data?.dmg || 10));
+      target.hp = Math.max(0, target.hp - dmg);
+      console.log("[SERVER] Hit! Target", data.targetId, "took", dmg, "damage, HP now:", target.hp);
+
+      if (target.hp <= 0) {
+        target.alive = false;
+        console.log("[SERVER] Target died, respawning in 2s");
+
+        // respawn after 2s
+        this.clock.setTimeout(() => {
+          target.hp = 100;
+          target.alive = true;
+          target.x = 100 + Math.random() * 500;
+          target.y = 100 + Math.random() * 300;
+          console.log("[SERVER] Target respawned");
+        }, 2000);
+      }
+
+      // Broadcast hit to all clients for visual feedback
+      this.broadcast("hit_result", {
+        targetId: data.targetId,
+        dmg: dmg,
+        newHp: target.hp,
+      });
+    });
+
+    /* ---- game start validation (must have 2+ players) ---- */
+    this.onMessage("start_game", (client, data) => {
+      const playerCount = this.state.players.size;
+      console.log("[SERVER] Game start requested by", client.sessionId, "players:", playerCount);
+
+      if (playerCount < 2) {
+        console.log("[SERVER] ❌ BLOCKED - Cannot start with", playerCount, "player(s). Need 2+");
+        this.send(client, "start_blocked", { 
+          message: `Need 2 players to start. Currently: ${playerCount}` 
+        });
+        return;
+      }
+
+      console.log("[SERVER] ✅ APPROVED - Starting game with", playerCount, "players");
+      this.broadcast("game_start", { timestamp: Date.now() });
+    });
+
+    /* ---- shooting ---- */
     this.onMessage("shoot", (client, data) => {
       console.log("[SERVER] Received shoot from", client.sessionId, "data:", data);
       const shooter = this.state.players.get(client.sessionId);
