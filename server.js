@@ -183,6 +183,7 @@ class BattleRoom extends Room {
       }
     });
 
+     
     /* ---- movement ---- */
     this.onMessage("move", (client, data) => {
       const p = this.state.players.get(client.sessionId);
