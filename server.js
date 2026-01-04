@@ -1,53 +1,61 @@
-const http = require("http");
-const express = require("express");
-const { Server, Room } = require("colyseus");
-const { WebSocketTransport } = require("@colyseus/ws-transport");
-const { Schema, type, MapSchema } = require("@colyseus/schema");
-
-/* =========================
-   SCHEMAS
-========================= */
-
-class Player extends Schema {
-  constructor() {
-    super();
-    this.x = 100;
-    this.y = 100;
-    this.hp = 100;
-    this.alive = true;
-    this.name = "Player";
-  }
-}
-
-type("number")(Player.prototype, "x");
-type("number")(Player.prototype, "y");
-type("number")(Player.prototype, "hp");
-type("boolean")(Player.prototype, "alive");
-type("string")(Player.prototype, "name");
-
-class State extends Schema {
-  constructor() {
-    super();
-    this.players = new MapSchema();
-  }
-}
-
-type({ map: Player })(State.prototype, "players");
-
-/* =========================
-   ROOM
-========================= */
-
 class BattleRoom extends Room {
   onCreate(options) {
-    console.log("BattleRoom created");
-    this.maxClients = 100; // ✅ allow up to 100 players per room
+    console.log("[BATTLEROOM] 🎮 Created with roomId:", this.roomId, "matchId:", options?.matchId);
+    this.maxClients = 2;
+    this.matchId = options?.matchId || this.roomId;
+    this.readyPlayers = new Set();
+    this.gameStarted = false;
+    this.playersEntered = 0;
+    
     this.setState(new State());
-
-    // smoother updates
     this.setPatchRate(50);
+    
+    // ✅ CRITICAL: Set strict timeout - if 2nd player doesn't join within 10 seconds, destroy room
+    console.log("[BATTLEROOM]", this.matchId, "⏱️ Starting 10s timeout for 2nd player...");
+    this.secondPlayerTimeout = this.clock.setTimeout(() => {
+      console.log("[BATTLEROOM]", this.matchId, "❌ TIMEOUT: 2nd player never arrived, destroying room");
+      // Disconnect any players in this room
+      this.clients.forEach(client => {
+        console.log("[BATTLEROOM]", this.matchId, "Disconnecting client:", client.sessionId);
+        client.leave();
+      });
+      this.disconnect();
+    }, 10000);
+    
+    // ✅ Room locked for new players once 2 join
+    this.onStateChange(() => {
+      if (this.state.players.size === 2) {
+        this.locked = true;
+        // Cancel timeout since both players are here
+        if (this.secondPlayerTimeout) {
+          this.clock.clear(this.secondPlayerTimeout);
+          this.secondPlayerTimeout = null;
+          console.log("[BATTLEROOM]", this.matchId, "🔒 Room locked - both players present!");
+        }
+      }
+    });
 
-     
+    this.onMessage("game_ready", (client, data) => {
+      console.log("[BATTLEROOM]", this.matchId, "Player", client.sessionId, "ready");
+      console.log("[BATTLEROOM]", this.matchId, "Current players in room:", this.state.players.size);
+      this.readyPlayers.add(client.sessionId);
+      
+      // ✅ Validate: Must have EXACTLY 2 players in the room AND both ready
+      const playerCount = this.state.players.size;
+      if (playerCount !== 2) {
+        console.log("[BATTLEROOM]", this.matchId, "❌ Cannot start - player count is", playerCount, "expected 2");
+        return;
+      }
+      
+      if (this.readyPlayers.size === 2 && !this.gameStarted) {
+        console.log("[BATTLEROOM]", this.matchId, "✅ Both players ready (confirmed", playerCount, 'in room), starting game!');
+        this.gameStarted = true;
+        this.broadcast("game_can_start", { timestamp: Date.now() });
+      } else {
+        console.log("[BATTLEROOM]", this.matchId, "Waiting for second player... Ready:", this.readyPlayers.size, '/2');
+      }
+    });
+
     /* ---- movement ---- */
     this.onMessage("move", (client, data) => {
       const p = this.state.players.get(client.sessionId);
@@ -62,6 +70,60 @@ class BattleRoom extends Room {
       if (!p) return;
       const clean = String(data?.name ?? "Player").trim().slice(0, 16);
       p.name = clean || "Player";
+    });
+
+    /* ---- hit detection (client-side hitscan validation) ---- */
+    this.onMessage("hit", (client, data) => {
+      console.log("[SERVER] Hit message from", client.sessionId, "data:", data);
+      const shooter = this.state.players.get(client.sessionId);
+      const target = this.state.players.get(data?.targetId);
+
+      if (!shooter || !target || !shooter.alive || !target.alive) {
+        console.log("[SERVER] Invalid hit (shooter or target dead/missing)");
+        return;
+      }
+
+      const dmg = Math.max(1, Math.min(50, data?.dmg || 10));
+      target.hp = Math.max(0, target.hp - dmg);
+      console.log("[SERVER] Hit! Target", data.targetId, "took", dmg, "damage, HP now:", target.hp);
+
+      if (target.hp <= 0) {
+        target.alive = false;
+        console.log("[SERVER] Target died, respawning in 2s");
+
+        // respawn after 2s
+        this.clock.setTimeout(() => {
+          target.hp = 100;
+          target.alive = true;
+          target.x = 100 + Math.random() * 500;
+          target.y = 100 + Math.random() * 300;
+          console.log("[SERVER] Target respawned");
+        }, 2000);
+      }
+
+      // Broadcast hit to all clients for visual feedback
+      this.broadcast("hit_result", {
+        targetId: data.targetId,
+        dmg: dmg,
+        newHp: target.hp,
+      });
+    });
+
+    /* ---- game start validation (must have 2+ players) ---- */
+    this.onMessage("start_game", (client, data) => {
+      const playerCount = this.state.players.size;
+      console.log("[SERVER] Game start requested by", client.sessionId, "players:", playerCount);
+
+      if (playerCount < 2) {
+        console.log("[SERVER] ❌ BLOCKED - Cannot start with", playerCount, "player(s). Need 2+");
+        this.send(client, "start_blocked", { 
+          message: `Need 2 players to start. Currently: ${playerCount}` 
+        });
+        return;
+      }
+
+      console.log("[SERVER] ✅ APPROVED - Starting game with", playerCount, "players");
+      this.broadcast("game_start", { timestamp: Date.now() });
     });
 
     /* ---- shooting ---- */
@@ -160,10 +222,10 @@ class BattleRoom extends Room {
   }
 
   onJoin(client, options) {
-    console.log("Client joined:", client.sessionId);
+    this.playersEntered += 1;
+    console.log("[BATTLEROOM]", this.matchId, "👤 Player", this.playersEntered, "joined:", client.sessionId);
 
     const p = new Player();
-
     const clean = String(options?.name ?? "Player").trim().slice(0, 16);
     p.name = clean || "Player";
 
@@ -171,47 +233,14 @@ class BattleRoom extends Room {
     p.y = 100 + Math.random() * 300;
 
     this.state.players.set(client.sessionId, p);
+    
+    console.log("[BATTLEROOM]", this.matchId, "📊 Total players in room now:", this.state.players.size, "/ 2");
   }
 
   onLeave(client) {
-    console.log("Client left:", client.sessionId);
+    console.log("[BATTLEROOM]", this.matchId, "👋 Client left:", client.sessionId);
     this.state.players.delete(client.sessionId);
+    this.readyPlayers.delete(client.sessionId);
+    console.log("[BATTLEROOM]", this.matchId, "📊 Remaining players:", this.state.players.size);
   }
 }
-
-/* =========================
-   SERVER
-========================= */
-
-const app = express();
-app.set("trust proxy", true);
-
-// ✅ Enable CORS for all origins
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
-  next();
-});
-
-app.get("/", (_, res) => res.status(200).send("EvoBlasters server running"));
-app.get("/health", (_, res) => res.status(200).json({ ok: true }));
-
-const server = http.createServer(app);
-
-const gameServer = new Server({
-  transport: new WebSocketTransport({ server }),
-});
-
-gameServer.define("battle", BattleRoom);
-
-const PORT = Number(process.env.PORT || 2567);
-
-server.listen(PORT, "0.0.0.0", () => {
-  console.log("listening on", PORT);
-});
-
-
