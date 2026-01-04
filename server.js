@@ -46,7 +46,6 @@ class MatchmakingRoom extends Room {
     this.queue = [];
     this.waitingPlayers = new Map();
     this.pendingMatches = new Map();
-    this.gameServer = null; // Will be set from outside
 
     this.onMessage("join_queue", (client, data) => {
       console.log("[MATCHMAKING] Player", client.sessionId, "joining queue:", data.name);
@@ -77,19 +76,9 @@ class MatchmakingRoom extends Room {
       console.log("[MATCHMAKING] Match", matchId, "accepted:", match.acceptedCount, "/2");
 
       if (match.acceptedCount === 2) {
-        console.log("[MATCHMAKING] ✅ Both players accepted! Creating battle room and inviting both players");
-        const p1Client = this.clients.find(c => c.sessionId === match.p1Id);
-        const p2Client = this.clients.find(c => c.sessionId === match.p2Id);
-        
-        if (p1Client) {
-          this.send(match.p1Id, "game_start", { matchId, roomId: matchId });
-          console.log("[MATCHMAKING] Sent game_start to player 1:", match.p1Id);
-        }
-        if (p2Client) {
-          this.send(match.p2Id, "game_start", { matchId, roomId: matchId });
-          console.log("[MATCHMAKING] Sent game_start to player 2:", match.p2Id);
-        }
-        
+        console.log("[MATCHMAKING] ✅ Both players accepted! Sending game_start");
+        this.send(match.p1Id, "game_start", { matchId });
+        this.send(match.p2Id, "game_start", { matchId });
         this.pendingMatches.delete(matchId);
         this.waitingPlayers.delete(match.p1Id);
         this.waitingPlayers.delete(match.p2Id);
