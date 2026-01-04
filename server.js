@@ -46,6 +46,7 @@ class MatchmakingRoom extends Room {
     this.queue = [];
     this.waitingPlayers = new Map();
     this.pendingMatches = new Map();
+    this.gameServer = null; // Will be set from outside
 
     this.onMessage("join_queue", (client, data) => {
       console.log("[MATCHMAKING] Player", client.sessionId, "joining queue:", data.name);
@@ -76,9 +77,19 @@ class MatchmakingRoom extends Room {
       console.log("[MATCHMAKING] Match", matchId, "accepted:", match.acceptedCount, "/2");
 
       if (match.acceptedCount === 2) {
-        console.log("[MATCHMAKING] ✅ Both players accepted! Sending game_start");
-        this.send(match.p1Id, "game_start", { matchId });
-        this.send(match.p2Id, "game_start", { matchId });
+        console.log("[MATCHMAKING] ✅ Both players accepted! Creating battle room and inviting both players");
+        const p1Client = this.clients.find(c => c.sessionId === match.p1Id);
+        const p2Client = this.clients.find(c => c.sessionId === match.p2Id);
+        
+        if (p1Client) {
+          this.send(match.p1Id, "game_start", { matchId, roomId: matchId });
+          console.log("[MATCHMAKING] Sent game_start to player 1:", match.p1Id);
+        }
+        if (p2Client) {
+          this.send(match.p2Id, "game_start", { matchId, roomId: matchId });
+          console.log("[MATCHMAKING] Sent game_start to player 2:", match.p2Id);
+        }
+        
         this.pendingMatches.delete(matchId);
         this.waitingPlayers.delete(match.p1Id);
         this.waitingPlayers.delete(match.p2Id);
@@ -163,23 +174,59 @@ class MatchmakingRoom extends Room {
 
 class BattleRoom extends Room {
   onCreate(options) {
-    console.log("[BATTLEROOM] Created, matchId:", options?.matchId);
+    console.log("[BATTLEROOM] 🎮 Created with roomId:", this.roomId, "matchId:", options?.matchId);
     this.maxClients = 2;
-    this.matchId = options?.matchId || "unknown";
+    this.matchId = options?.matchId || this.roomId;
     this.readyPlayers = new Set();
     this.gameStarted = false;
+    this.playersEntered = 0;
     
     this.setState(new State());
     this.setPatchRate(50);
+    
+    // ✅ CRITICAL: Set strict timeout - if 2nd player doesn't join within 10 seconds, destroy room
+    console.log("[BATTLEROOM]", this.matchId, "⏱️ Starting 10s timeout for 2nd player...");
+    this.secondPlayerTimeout = this.clock.setTimeout(() => {
+      console.log("[BATTLEROOM]", this.matchId, "❌ TIMEOUT: 2nd player never arrived, destroying room");
+      // Disconnect any players in this room
+      this.clients.forEach(client => {
+        console.log("[BATTLEROOM]", this.matchId, "Disconnecting client:", client.sessionId);
+        client.leave();
+      });
+      this.disconnect();
+    }, 10000);
+    
+    // ✅ Room locked for new players once 2 join
+    this.onStateChange(() => {
+      if (this.state.players.size === 2) {
+        this.locked = true;
+        // Cancel timeout since both players are here
+        if (this.secondPlayerTimeout) {
+          this.clock.clear(this.secondPlayerTimeout);
+          this.secondPlayerTimeout = null;
+          console.log("[BATTLEROOM]", this.matchId, "🔒 Room locked - both players present!");
+        }
+      }
+    });
 
     this.onMessage("game_ready", (client, data) => {
       console.log("[BATTLEROOM]", this.matchId, "Player", client.sessionId, "ready");
+      console.log("[BATTLEROOM]", this.matchId, "Current players in room:", this.state.players.size);
       this.readyPlayers.add(client.sessionId);
       
+      // ✅ Validate: Must have EXACTLY 2 players in the room AND both ready
+      const playerCount = this.state.players.size;
+      if (playerCount !== 2) {
+        console.log("[BATTLEROOM]", this.matchId, "❌ Cannot start - player count is", playerCount, "expected 2");
+        return;
+      }
+      
       if (this.readyPlayers.size === 2 && !this.gameStarted) {
-        console.log("[BATTLEROOM]", this.matchId, "Both ready, starting game!");
+        console.log("[BATTLEROOM]", this.matchId, "✅ Both players ready (confirmed", playerCount, 'in room), starting game!');
         this.gameStarted = true;
         this.broadcast("game_can_start", { timestamp: Date.now() });
+      } else {
+        console.log("[BATTLEROOM]", this.matchId, "Waiting for second player... Ready:", this.readyPlayers.size, '/2');
       }
     });
 
@@ -349,7 +396,8 @@ class BattleRoom extends Room {
   }
 
   onJoin(client, options) {
-    console.log("[BATTLEROOM]", this.matchId, "Client joined:", client.sessionId);
+    this.playersEntered += 1;
+    console.log("[BATTLEROOM]", this.matchId, "👤 Player", this.playersEntered, "joined:", client.sessionId);
 
     const p = new Player();
     const clean = String(options?.name ?? "Player").trim().slice(0, 16);
@@ -360,12 +408,14 @@ class BattleRoom extends Room {
 
     this.state.players.set(client.sessionId, p);
     
-    console.log("[BATTLEROOM]", this.matchId, "Players in room:", this.state.players.size, "Expected: 2");
+    console.log("[BATTLEROOM]", this.matchId, "📊 Total players in room now:", this.state.players.size, "/ 2");
   }
 
   onLeave(client) {
-    console.log("Client left:", client.sessionId);
+    console.log("[BATTLEROOM]", this.matchId, "👋 Client left:", client.sessionId);
     this.state.players.delete(client.sessionId);
+    this.readyPlayers.delete(client.sessionId);
+    console.log("[BATTLEROOM]", this.matchId, "📊 Remaining players:", this.state.players.size);
   }
 }
 
