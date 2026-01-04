@@ -46,7 +46,6 @@ class MatchmakingRoom extends Room {
     this.queue = [];
     this.waitingPlayers = new Map();
     this.pendingMatches = new Map();
-    this.gameServer = null; // Will be set from outside
 
     this.onMessage("join_queue", (client, data) => {
       console.log("[MATCHMAKING] Player", client.sessionId, "joining queue:", data.name);
@@ -77,7 +76,7 @@ class MatchmakingRoom extends Room {
       console.log("[MATCHMAKING] Match", matchId, "accepted:", match.acceptedCount, "/2");
 
       if (match.acceptedCount === 2) {
-        console.log("[MATCHMAKING] ✅ Both players accepted! Creating battle room and inviting both players");
+        console.log("[MATCHMAKING] ✅ Both players accepted! Sending game_start");
         const p1Client = this.clients.find(c => c.sessionId === match.p1Id);
         const p2Client = this.clients.find(c => c.sessionId === match.p2Id);
         
@@ -169,7 +168,7 @@ class MatchmakingRoom extends Room {
 }
 
 /* =========================
-   ROOM
+   BATTLE ROOM
 ========================= */
 
 class BattleRoom extends Room {
@@ -246,7 +245,7 @@ class BattleRoom extends Room {
       p.name = clean || "Player";
     });
 
-    /* ---- hit detection (client-side hitscan validation) ---- */
+    /* ---- hit detection ---- */
     this.onMessage("hit", (client, data) => {
       console.log("[SERVER] Hit message from", client.sessionId, "data:", data);
       const shooter = this.state.players.get(client.sessionId);
@@ -265,7 +264,6 @@ class BattleRoom extends Room {
         target.alive = false;
         console.log("[SERVER] Target died, respawning in 2s");
 
-        // respawn after 2s
         this.clock.setTimeout(() => {
           target.hp = 100;
           target.alive = true;
@@ -275,29 +273,11 @@ class BattleRoom extends Room {
         }, 2000);
       }
 
-      // Broadcast hit to all clients for visual feedback
       this.broadcast("hit_result", {
         targetId: data.targetId,
         dmg: dmg,
         newHp: target.hp,
       });
-    });
-
-    /* ---- game start validation (must have 2+ players) ---- */
-    this.onMessage("start_game", (client, data) => {
-      const playerCount = this.state.players.size;
-      console.log("[SERVER] Game start requested by", client.sessionId, "players:", playerCount);
-
-      if (playerCount < 2) {
-        console.log("[SERVER] ❌ BLOCKED - Cannot start with", playerCount, "player(s). Need 2+");
-        this.send(client, "start_blocked", { 
-          message: `Need 2 players to start. Currently: ${playerCount}` 
-        });
-        return;
-      }
-
-      console.log("[SERVER] ✅ APPROVED - Starting game with", playerCount, "players");
-      this.broadcast("game_start", { timestamp: Date.now() });
     });
 
     /* ---- shooting ---- */
@@ -320,7 +300,6 @@ class BattleRoom extends Room {
         return;
       }
 
-      // normalize direction
       const len = Math.hypot(dx, dy) || 1;
       const dirx = dx / len;
       const diry = dy / len;
@@ -333,7 +312,6 @@ class BattleRoom extends Room {
       let bestT = Infinity;
 
       console.log("[SERVER] Checking", this.state.players.size - 1, "other players for hit");
-      // simple hitscan ray
       for (const [id, p] of this.state.players.entries()) {
         if (id === client.sessionId) continue;
         if (!p.alive) continue;
@@ -368,7 +346,6 @@ class BattleRoom extends Room {
           target.alive = false;
           console.log("[SERVER] Target", hitId, "is dead, respawning in 2s");
 
-          // respawn after 2s
           this.clock.setTimeout(() => {
             target.hp = 100;
             target.alive = true;
@@ -381,7 +358,6 @@ class BattleRoom extends Room {
         console.log("[SERVER] No hit detected");
       }
 
-      // broadcast for visuals
       console.log("[SERVER] Broadcasting shot to all players");
       this.broadcast("shot", {
         fromId: client.sessionId,
@@ -426,7 +402,6 @@ class BattleRoom extends Room {
 const app = express();
 app.set("trust proxy", true);
 
-// ✅ Enable CORS for all origins
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
