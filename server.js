@@ -402,5 +402,5 @@ gameServer.define("battle", BattleRoom);
 const PORT = Number(process.env.PORT || 2567);
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log("listening on", PORT);
+  console.log("[SERVER] EvoBlasters running on port", PORT);
 });
