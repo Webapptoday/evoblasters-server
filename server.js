@@ -1,58 +1,185 @@
+const http = require("http");
+const express = require("express");
+const { Server, Room } = require("colyseus");
+const { WebSocketTransport } = require("@colyseus/ws-transport");
+const { Schema, type, MapSchema } = require("@colyseus/schema");
+
+/* =========================
+   SCHEMAS
+========================= */
+
+class Player extends Schema {
+  constructor() {
+    super();
+    this.x = 100;
+    this.y = 100;
+    this.hp = 100;
+    this.alive = true;
+    this.name = "Player";
+  }
+}
+
+type("number")(Player.prototype, "x");
+type("number")(Player.prototype, "y");
+type("number")(Player.prototype, "hp");
+type("boolean")(Player.prototype, "alive");
+type("string")(Player.prototype, "name");
+
+class State extends Schema {
+  constructor() {
+    super();
+    this.players = new MapSchema();
+  }
+}
+
+type({ map: Player })(State.prototype, "players");
+
+/* =========================
+   MATCHMAKING ROOM (Lobby)
+========================= */
+
+class MatchmakingRoom extends Room {
+  onCreate(options) {
+    console.log("[MATCHMAKING] Room created");
+    this.maxClients = 1000;
+    
+    this.queue = [];
+    this.waitingPlayers = new Map();
+    this.pendingMatches = new Map();
+
+    this.onMessage("join_queue", (client, data) => {
+      console.log("[MATCHMAKING] Player", client.sessionId, "joining queue:", data.name);
+      
+      this.waitingPlayers.set(client.sessionId, {
+        id: client.sessionId,
+        name: data.name || "Player",
+        joinedAt: Date.now(),
+      });
+
+      this.queue.push(client.sessionId);
+      console.log("[MATCHMAKING] Queue size:", this.queue.length);
+      this.tryCreateMatch();
+    });
+
+    this.onMessage("match_accepted", (client, data) => {
+      const { matchId } = data;
+      console.log("[MATCHMAKING] Player", client.sessionId, "accepted match", matchId);
+      
+      if (!this.pendingMatches.has(matchId)) {
+        console.log("[MATCHMAKING] Match", matchId, "not found");
+        return;
+      }
+
+      const match = this.pendingMatches.get(matchId);
+      match.acceptedCount = (match.acceptedCount || 0) + 1;
+
+      console.log("[MATCHMAKING] Match", matchId, "accepted:", match.acceptedCount, "/2");
+
+      if (match.acceptedCount === 2) {
+        console.log("[MATCHMAKING] ✅ Both players accepted! Sending game_start");
+        this.send(match.p1Id, "game_start", { matchId });
+        this.send(match.p2Id, "game_start", { matchId });
+        this.pendingMatches.delete(matchId);
+        this.waitingPlayers.delete(match.p1Id);
+        this.waitingPlayers.delete(match.p2Id);
+      }
+    });
+  }
+
+  tryCreateMatch() {
+    if (this.queue.length >= 2) {
+      const p1Id = this.queue.shift();
+      const p2Id = this.queue.shift();
+      const p1 = this.waitingPlayers.get(p1Id);
+      const p2 = this.waitingPlayers.get(p2Id);
+
+      if (!p1 || !p2) {
+        console.log("[MATCHMAKING] ERROR: Player missing from waiting list");
+        return;
+      }
+
+      const matchId = `match_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      this.pendingMatches.set(matchId, {
+        matchId,
+        p1Id,
+        p2Id,
+        p1Name: p1.name,
+        p2Name: p2.name,
+        createdAt: Date.now(),
+        acceptedCount: 0,
+      });
+
+      console.log("[MATCHMAKING] ✅ Match found!", p1.name, "vs", p2.name, "ID:", matchId);
+
+      this.send(p1Id, "match_found", { 
+        matchId, 
+        opponent: p2.name,
+        opponentId: p2Id,
+      });
+      this.send(p2Id, "match_found", { 
+        matchId, 
+        opponent: p1.name,
+        opponentId: p1Id,
+      });
+
+      this.clock.setTimeout(() => {
+        if (this.pendingMatches.has(matchId)) {
+          console.log("[MATCHMAKING] Match", matchId, "timed out (no acceptance)");
+          const m = this.pendingMatches.get(matchId);
+          this.pendingMatches.delete(matchId);
+          
+          if (this.clients.find(c => c.sessionId === m.p1Id)) {
+            this.waitingPlayers.set(m.p1Id, { id: m.p1Id, name: m.p1Name, joinedAt: Date.now() });
+            this.queue.push(m.p1Id);
+          }
+          if (this.clients.find(c => c.sessionId === m.p2Id)) {
+            this.waitingPlayers.set(m.p2Id, { id: m.p2Id, name: m.p2Name, joinedAt: Date.now() });
+            this.queue.push(m.p2Id);
+          }
+          this.tryCreateMatch();
+        }
+      }, 30000);
+    }
+  }
+
+  onLeave(client) {
+    console.log("[MATCHMAKING] Player left:", client.sessionId);
+    this.queue = this.queue.filter(id => id !== client.sessionId);
+    this.waitingPlayers.delete(client.sessionId);
+    
+    for (const [matchId, match] of this.pendingMatches.entries()) {
+      if (match.p1Id === client.sessionId || match.p2Id === client.sessionId) {
+        console.log("[MATCHMAKING] Removing player from pending match", matchId);
+        this.pendingMatches.delete(matchId);
+      }
+    }
+  }
+}
+
+/* =========================
+   ROOM
+========================= */
+
 class BattleRoom extends Room {
   onCreate(options) {
-    console.log("[BATTLEROOM] 🎮 Created with roomId:", this.roomId, "matchId:", options?.matchId);
+    console.log("[BATTLEROOM] Created, matchId:", options?.matchId);
     this.maxClients = 2;
-    this.matchId = options?.matchId || this.roomId;
+    this.matchId = options?.matchId || "unknown";
     this.readyPlayers = new Set();
     this.gameStarted = false;
-    this.playersEntered = 0;
     
     this.setState(new State());
     this.setPatchRate(50);
-    
-    // ✅ CRITICAL: Set strict timeout - if 2nd player doesn't join within 10 seconds, destroy room
-    console.log("[BATTLEROOM]", this.matchId, "⏱️ Starting 10s timeout for 2nd player...");
-    this.secondPlayerTimeout = this.clock.setTimeout(() => {
-      console.log("[BATTLEROOM]", this.matchId, "❌ TIMEOUT: 2nd player never arrived, destroying room");
-      // Disconnect any players in this room
-      this.clients.forEach(client => {
-        console.log("[BATTLEROOM]", this.matchId, "Disconnecting client:", client.sessionId);
-        client.leave();
-      });
-      this.disconnect();
-    }, 10000);
-    
-    // ✅ Room locked for new players once 2 join
-    this.onStateChange(() => {
-      if (this.state.players.size === 2) {
-        this.locked = true;
-        // Cancel timeout since both players are here
-        if (this.secondPlayerTimeout) {
-          this.clock.clear(this.secondPlayerTimeout);
-          this.secondPlayerTimeout = null;
-          console.log("[BATTLEROOM]", this.matchId, "🔒 Room locked - both players present!");
-        }
-      }
-    });
 
     this.onMessage("game_ready", (client, data) => {
       console.log("[BATTLEROOM]", this.matchId, "Player", client.sessionId, "ready");
-      console.log("[BATTLEROOM]", this.matchId, "Current players in room:", this.state.players.size);
       this.readyPlayers.add(client.sessionId);
       
-      // ✅ Validate: Must have EXACTLY 2 players in the room AND both ready
-      const playerCount = this.state.players.size;
-      if (playerCount !== 2) {
-        console.log("[BATTLEROOM]", this.matchId, "❌ Cannot start - player count is", playerCount, "expected 2");
-        return;
-      }
-      
       if (this.readyPlayers.size === 2 && !this.gameStarted) {
-        console.log("[BATTLEROOM]", this.matchId, "✅ Both players ready (confirmed", playerCount, 'in room), starting game!');
+        console.log("[BATTLEROOM]", this.matchId, "Both ready, starting game!");
         this.gameStarted = true;
         this.broadcast("game_can_start", { timestamp: Date.now() });
-      } else {
-        console.log("[BATTLEROOM]", this.matchId, "Waiting for second player... Ready:", this.readyPlayers.size, '/2');
       }
     });
 
@@ -222,8 +349,7 @@ class BattleRoom extends Room {
   }
 
   onJoin(client, options) {
-    this.playersEntered += 1;
-    console.log("[BATTLEROOM]", this.matchId, "👤 Player", this.playersEntered, "joined:", client.sessionId);
+    console.log("[BATTLEROOM]", this.matchId, "Client joined:", client.sessionId);
 
     const p = new Player();
     const clean = String(options?.name ?? "Player").trim().slice(0, 16);
@@ -234,13 +360,47 @@ class BattleRoom extends Room {
 
     this.state.players.set(client.sessionId, p);
     
-    console.log("[BATTLEROOM]", this.matchId, "📊 Total players in room now:", this.state.players.size, "/ 2");
+    console.log("[BATTLEROOM]", this.matchId, "Players in room:", this.state.players.size, "Expected: 2");
   }
 
   onLeave(client) {
-    console.log("[BATTLEROOM]", this.matchId, "👋 Client left:", client.sessionId);
+    console.log("Client left:", client.sessionId);
     this.state.players.delete(client.sessionId);
-    this.readyPlayers.delete(client.sessionId);
-    console.log("[BATTLEROOM]", this.matchId, "📊 Remaining players:", this.state.players.size);
   }
 }
+
+/* =========================
+   SERVER
+========================= */
+
+const app = express();
+app.set("trust proxy", true);
+
+// ✅ Enable CORS for all origins
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+app.get("/", (_, res) => res.status(200).send("EvoBlasters server running"));
+app.get("/health", (_, res) => res.status(200).json({ ok: true }));
+
+const server = http.createServer(app);
+
+const gameServer = new Server({
+  transport: new WebSocketTransport({ server }),
+});
+
+gameServer.define("matchmaking", MatchmakingRoom);
+gameServer.define("battle", BattleRoom);
+
+const PORT = Number(process.env.PORT || 2567);
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log("listening on", PORT);
+});
