@@ -453,7 +453,10 @@ const gameServer = new Server({
   transport: new WebSocketTransport({ server }),
 });
 
-gameServer.define("matchmaking", MatchmakingRoom);
+// ✅ Limit matchmaking room to only 1 instance
+gameServer.define("matchmaking", MatchmakingRoom, {
+  maxInstances: 1  // Only one matchmaking room
+});
 gameServer.define("battle", BattleRoom);
 
 const PORT = Number(process.env.PORT || 2567);
