@@ -390,37 +390,18 @@ app.use((req, res, next) => {
 app.get("/", (_, res) => res.status(200).send("EvoBlasters server running"));
 app.get("/health", (_, res) => res.status(200).json({ ok: true }));
 
-// ✅ Test endpoint to verify server is running
-app.get("/debug", (req, res) => {
-  res.json({ 
-    status: "ok", 
-    timestamp: new Date().toISOString(),
-    port: process.env.PORT || 2567
-  });
-});
-
 const server = http.createServer(app);
 
-console.log("[SERVER] Creating Colyseus server with WebSocket transport...");
 const gameServer = new Server({
-  transport: new WebSocketTransport({ 
-    server,
-    pingInterval: 10000,
-    pingTimeout: 5000,
-  }),
+  transport: new WebSocketTransport({ server }),
 });
 
 gameServer.define("matchmaking", MatchmakingRoom);
 gameServer.define("battle", BattleRoom);
 
-// ✅ Log when rooms are created/joined
-gameServer.onConnection((client) => {
-  console.log("[SERVER] ✅ WebSocket connected:", client.sessionId);
-});
-
 const PORT = Number(process.env.PORT || 2567);
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log("[SERVER] ✅ Server listening on port", PORT);
-  console.log("[SERVER] ✅ WebSocket endpoint: wss://evoblasters-server-production.up.railway.app");
+  console.log("listening on", PORT);
+  console.log("WebSocket URL: wss://evoblasters-server-production.up.railway.app");
 });
