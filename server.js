@@ -25,14 +25,31 @@ type("number")(Player.prototype, "hp");
 type("boolean")(Player.prototype, "alive");
 type("string")(Player.prototype, "name");
 
+class Objective extends Schema {
+  constructor() {
+    super();
+    this.x = 1300; // center of 2600px wide map
+    this.y = 900;  // center of 1800px tall map
+    this.hp = 200;
+    this.alive = true;
+  }
+}
+
+type("number")(Objective.prototype, "x");
+type("number")(Objective.prototype, "y");
+type("number")(Objective.prototype, "hp");
+type("boolean")(Objective.prototype, "alive");
+
 class State extends Schema {
   constructor() {
     super();
     this.players = new MapSchema();
+    this.objective = new Objective();
   }
 }
 
 type({ map: Player })(State.prototype, "players");
+type(Objective)(State.prototype, "objective");
 
 /* =========================
    MATCHMAKING ROOM (Lobby)
@@ -309,9 +326,47 @@ class BattleRoom extends Room {
         }
       }
 
+      // Check if hit the objective
+      let hitObjective = false;
+      if (this.state.objective && this.state.objective.alive) {
+        const ox = this.state.objective.x - x;
+        const oy = this.state.objective.y - y;
+        const ot = ox * dirx + oy * diry;
+
+        if (ot >= 0 && ot <= MAX_RANGE && ot < bestT) {
+          const px = x + dirx * ot;
+          const py = y + diry * ot;
+          const dist = Math.hypot(this.state.objective.x - px, this.state.objective.y - py);
+          const OBJECTIVE_RADIUS = 40;
+
+          console.log("[SERVER] Objective check - dist:", dist, "HIT?", dist <= OBJECTIVE_RADIUS);
+
+          if (dist <= OBJECTIVE_RADIUS) {
+            hitObjective = true;
+            bestT = ot;
+            hitId = null; // Don't hit player if objective is closer
+          }
+        }
+      }
+
       let hitHp = null;
 
-      if (hitId) {
+      if (hitObjective) {
+        this.state.objective.hp = Math.max(0, this.state.objective.hp - DAMAGE);
+        hitHp = this.state.objective.hp;
+        console.log("[SERVER] HIT OBJECTIVE! HP now:", hitHp);
+
+        if (this.state.objective.hp <= 0) {
+          this.state.objective.alive = false;
+          console.log("[SERVER] 🎉 Objective destroyed! Spawning potion at center");
+
+          // Notify all players that objective is destroyed and potion spawned
+          this.broadcast("objective_destroyed", {
+            potionX: this.state.objective.x,
+            potionY: this.state.objective.y,
+          });
+        }
+      } else if (hitId) {
         const target = this.state.players.get(hitId);
         target.hp = Math.max(0, target.hp - DAMAGE);
         hitHp = target.hp;
@@ -344,6 +399,7 @@ class BattleRoom extends Room {
         dy: diry,
         hitId,
         hitHp,
+        hitObjective,
       });
     });
   }
