@@ -457,7 +457,11 @@ const gameServer = new Server({
 gameServer.define("matchmaking", MatchmakingRoom, {
   maxInstances: 1  // Only one matchmaking room
 });
-gameServer.define("battle", BattleRoom);
+
+// ✅ Battle rooms grouped by matchId
+gameServer.define("battle", BattleRoom, {
+  filterBy: ["matchId"]  // Group rooms by matchId parameter
+});
 
 const PORT = Number(process.env.PORT || 2567);
 
