@@ -51,7 +51,25 @@ class State extends Schema {
 type({ map: Player })(State.prototype, "players");
 type(Objective)(State.prototype, "objective");
 
-/* =========================
+class WaitingPlayer extends Schema {
+  constructor(id, name) {
+    super();
+    this.id = id;
+    this.name = name;
+  }
+}
+
+type("string")(WaitingPlayer.prototype, "id");
+type("string")(WaitingPlayer.prototype, "name");
+
+class MatchmakingState extends Schema {
+  constructor() {
+    super();
+    this.queue = new MapSchema();
+  }
+}
+
+type({ map: WaitingPlayer })(MatchmakingState.prototype, "queue");/* =========================
    MATCHMAKING ROOM (Lobby)
 ========================= */
 
@@ -64,14 +82,22 @@ class MatchmakingRoom extends Room {
     this.waitingPlayers = new Map();
     this.pendingMatches = new Map();
 
+    // ✅ Set up synced state so clients see who's waiting
+    this.setState(new MatchmakingState());
+
     this.onMessage("join_queue", (client, data) => {
       console.log("[MATCHMAKING] Player", client.sessionId, "joining queue:", data.name);
       
-      this.waitingPlayers.set(client.sessionId, {
+      const playerData = {
         id: client.sessionId,
         name: data.name || "Player",
         joinedAt: Date.now(),
-      });
+      };
+      
+      this.waitingPlayers.set(client.sessionId, playerData);
+      
+      // ✅ Add to synced state
+      this.state.queue.set(client.sessionId, new WaitingPlayer(client.sessionId, data.name || "Player"));
 
       this.queue.push(client.sessionId);
       console.log("[MATCHMAKING] Queue size:", this.queue.length);
@@ -128,6 +154,10 @@ class MatchmakingRoom extends Room {
       });
 
       console.log("[MATCHMAKING] ✅ Match found!", p1.name, "vs", p2.name, "ID:", matchId);
+      
+      // ✅ Remove from synced queue
+      this.state.queue.delete(p1Id);
+      this.state.queue.delete(p2Id);
 
       this.send(p1Id, "match_found", { 
         matchId, 
@@ -164,6 +194,9 @@ class MatchmakingRoom extends Room {
     console.log("[MATCHMAKING] Player left:", client.sessionId);
     this.queue = this.queue.filter(id => id !== client.sessionId);
     this.waitingPlayers.delete(client.sessionId);
+    
+    // ✅ Remove from synced state
+    this.state.queue.delete(client.sessionId);
     
     for (const [matchId, match] of this.pendingMatches.entries()) {
       if (match.p1Id === client.sessionId || match.p2Id === client.sessionId) {
