@@ -458,9 +458,9 @@ gameServer.define("matchmaking", MatchmakingRoom, {
   maxInstances: 1  // Only one matchmaking room
 });
 
-// ✅ Battle rooms grouped by matchId
+// ✅ Battle rooms - filterBy ensures both players with same matchId join same room
 gameServer.define("battle", BattleRoom, {
-  filterBy: ["matchId"]  // Group rooms by matchId parameter
+  filterBy: ["matchId"]
 });
 
 const PORT = Number(process.env.PORT || 2567);
