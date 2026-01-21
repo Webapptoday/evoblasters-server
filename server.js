@@ -312,6 +312,12 @@ class BattleRoom extends Room {
         return;
       }
 
+      console.log("[SERVER] 🔫 Shooter position:", { x: shooter.x, y: shooter.y });
+      console.log("[SERVER] All players in room:");
+      for (const [id, p] of this.state.players.entries()) {
+        console.log("[SERVER]   ", id === client.sessionId ? "→ SELF" : "   OPPONENT", { x: p.x, y: p.y, alive: p.alive });
+      }
+
       const x = Number(data?.x);
       const y = Number(data?.y);
       const dx = Number(data?.dx);
