@@ -339,7 +339,7 @@ class BattleRoom extends Room {
       const diry = dy / len;
 
       const MAX_RANGE = 700;
-      const HIT_RADIUS = 35; // Increased from 22 to be more forgiving (player circles are 32px diameter)
+      const HIT_RADIUS = 50; // Increased from 35 - easier to hit
       const DAMAGE = 10;
 
       let hitId = null;
