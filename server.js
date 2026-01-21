@@ -224,12 +224,16 @@ class BattleRoom extends Room {
 
     this.onMessage("game_ready", (client, data) => {
       console.log("[BATTLEROOM]", this.matchId, "Player", client.sessionId, "ready");
+      console.log("[BATTLEROOM]", this.matchId, "Current players in room:", this.state.players.size);
       this.readyPlayers.add(client.sessionId);
       
-      if (this.readyPlayers.size === 2 && !this.gameStarted) {
-        console.log("[BATTLEROOM]", this.matchId, "Both ready, starting game!");
+      // ✅ Only start game if BOTH players in room AND both ready
+      if (this.readyPlayers.size === 2 && this.state.players.size === 2 && !this.gameStarted) {
+        console.log("[BATTLEROOM]", this.matchId, "✅ Both players ready, starting game!");
         this.gameStarted = true;
         this.broadcast("game_can_start", { timestamp: Date.now() });
+      } else {
+        console.log("[BATTLEROOM]", this.matchId, "⏳ Waiting for both players. Ready:", this.readyPlayers.size, "In room:", this.state.players.size);
       }
     });
 
