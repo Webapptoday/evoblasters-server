@@ -423,7 +423,7 @@ class BattleRoom extends Room {
       }
 
       // broadcast for visuals
-      console.log("[SERVER] Broadcasting shot to all players");
+      console.log("[SERVER] Broadcasting shot to all players in room", this.roomId, "Clients count:", this.clients.length);
       this.broadcast("shot", {
         fromId: client.sessionId,
         x,
@@ -434,6 +434,7 @@ class BattleRoom extends Room {
         hitHp,
         hitObjective,
       });
+      console.log("[SERVER] Shot broadcast completed");
     });
   }
 
