@@ -339,13 +339,15 @@ class BattleRoom extends Room {
       const diry = dy / len;
 
       const MAX_RANGE = 700;
-      const HIT_RADIUS = 22;
+      const HIT_RADIUS = 35; // Increased from 22 to be more forgiving (player circles are 32px diameter)
       const DAMAGE = 10;
 
       let hitId = null;
       let bestT = Infinity;
 
-      console.log("[SERVER] Checking", this.state.players.size - 1, "other players for hit");
+      console.log("[SERVER] ⚔️ Hitscan from", { x, y }, "direction", { dirx, diry });
+      console.log("[SERVER] Checking', this.state.players.size - 1, "other players for hit");
+      
       // simple hitscan ray
       for (const [id, p] of this.state.players.entries()) {
         if (id === client.sessionId) continue;
@@ -361,11 +363,12 @@ class BattleRoom extends Room {
         const py = y + diry * t;
         const dist = Math.hypot(p.x - px, p.y - py);
 
-        console.log("[SERVER] Player", id, "dist:", dist, "t:", t, "HIT?", dist <= HIT_RADIUS && t < bestT);
+        console.log("[SERVER]   Player', id.substring(0, 8), "at', { x: p.x, y: p.y }, "dist:', dist.toFixed(2), "t:', t.toFixed(2), "HIT?', dist <= HIT_RADIUS);
 
         if (dist <= HIT_RADIUS && t < bestT) {
           bestT = t;
           hitId = id;
+          console.log("[SERVER] ✅ HIT! Setting hitId to', id);
         }
       }
 
@@ -429,11 +432,11 @@ class BattleRoom extends Room {
           }, 2000);
         }
       } else {
-        console.log("[SERVER] No hit detected");
+        console.log("[SERVER] ❌ No hit detected");
       }
 
       // broadcast for visuals
-      console.log("[SERVER] Broadcasting shot to all players in room", this.roomId, "Clients count:", this.clients.length);
+      console.log("[SERVER] 📡 Broadcasting shot with hitId:', hitId, "to', this.clients.length, "clients");
       this.broadcast("shot", {
         fromId: client.sessionId,
         x,
