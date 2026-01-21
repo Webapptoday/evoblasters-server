@@ -309,27 +309,33 @@ class BattleRoom extends Room {
 
     /* ---- shooting ---- */
     this.onMessage("shoot", (client, data) => {
-      console.log("[SERVER] Received shoot from", client.sessionId, "data:", data);
+      console.log("[SERVER] ===== SHOOT MESSAGE RECEIVED =====");
+      console.log("[SERVER] Client:", client.sessionId.substring(0, 8));
+      console.log("[SERVER] Raw data from client:", data);
+      
       const shooter = this.state.players.get(client.sessionId);
       if (!shooter || !shooter.alive) {
-        console.log("[SERVER] Shooter not found or not alive");
+        console.log("[SERVER] ❌ Shooter not found or not alive");
         return;
       }
 
-      console.log("[SERVER] 🔫 Shooter position:", { x: shooter.x, y: shooter.y });
+      console.log("[SERVER] ✅ Shooter found, position on server:", { x: shooter.x, y: shooter.y });
       console.log("[SERVER] All players in room:");
       for (const [id, p] of this.state.players.entries()) {
-        console.log("[SERVER]   ", id === client.sessionId ? "→ SELF" : "   OPPONENT", { x: p.x, y: p.y, alive: p.alive });
+        console.log("[SERVER]   ", id === client.sessionId ? "→ SELF" : "   OPPONENT", { x: p.x, y: p.y, alive: p.alive, hp: p.hp });
       }
 
-      const x = Number(data?.x);
-      const y = Number(data?.y);
+      // Use server's position, not client's (client x,y is unreliable due to latency)
+      const x = shooter.x;
+      const y = shooter.y;
       const dx = Number(data?.dx);
       const dy = Number(data?.dy);
 
-      console.log("[SERVER] Shoot values:", { x, y, dx, dy }, "All finite?", [x, y, dx, dy].every(Number.isFinite));
+      console.log("[SERVER] Using server position for hitscan:", { x, y });
+      console.log("[SERVER] Direction from client:", { dx, dy });
+      console.log("[SERVER] All values finite?", [x, y, dx, dy].every(Number.isFinite));
       if (![x, y, dx, dy].every(Number.isFinite)) {
-        console.log("[SERVER] Invalid shoot data, returning");
+        console.log("[SERVER] ❌ Invalid shoot data, returning");
         return;
       }
 
@@ -339,36 +345,56 @@ class BattleRoom extends Room {
       const diry = dy / len;
 
       const MAX_RANGE = 700;
-      const HIT_RADIUS = 50; // Increased from 35 - easier to hit
+      const HIT_RADIUS = 50;
       const DAMAGE = 10;
+
+      console.log("[SERVER] Normalized direction:", { dirx, diry });
+      console.log("[SERVER] Direction magnitude was:", len);
 
       let hitId = null;
       let bestT = Infinity;
 
-      console.log("[SERVER] ⚔️ Hitscan from", { x, y }, "direction", { dirx, diry });
-      console.log("[SERVER] Checking " + (this.state.players.size - 1) + " other players for hit");
+      console.log("[SERVER] ⚔️ Starting hitscan from", { x, y }, "direction", { dirx, diry });
+      console.log("[SERVER] Checking " + (this.state.players.size - 1) + " other players");
       
       // simple hitscan ray
       for (const [id, p] of this.state.players.entries()) {
-        if (id === client.sessionId) continue;
-        if (!p.alive) continue;
+        if (id === client.sessionId) {
+          console.log("[SERVER]   [SKIP] Player is self");
+          continue;
+        }
+        if (!p.alive) {
+          console.log("[SERVER]   [SKIP] Player " + id.substring(0, 8) + " is dead");
+          continue;
+        }
 
         const vx = p.x - x;
         const vy = p.y - y;
         const t = vx * dirx + vy * diry;
 
-        if (t < 0 || t > MAX_RANGE) continue;
+        console.log("[SERVER]   Checking opponent " + id.substring(0, 8));
+        console.log("[SERVER]     Position: {x:" + p.x.toFixed(1) + ", y:" + p.y.toFixed(1) + "}");
+        console.log("[SERVER]     Vector to opponent: {x:" + vx.toFixed(1) + ", y:" + vy.toFixed(1) + "}");
+        console.log("[SERVER]     Dot product (t):", t.toFixed(2));
+
+        if (t < 0 || t > MAX_RANGE) {
+          console.log("[SERVER]     ❌ OUT OF RANGE (t < 0 or t > " + MAX_RANGE + ")");
+          continue;
+        }
 
         const px = x + dirx * t;
         const py = y + diry * t;
         const dist = Math.hypot(p.x - px, p.y - py);
 
-        console.log("[SERVER]   Player " + id.substring(0, 8) + " at {x:" + p.x.toFixed(0) + ", y:" + p.y.toFixed(0) + "} dist:" + dist.toFixed(2) + " t:" + t.toFixed(2) + " HIT?" + (dist <= HIT_RADIUS));
+        console.log("[SERVER]     Ray point at t: {x:" + px.toFixed(1) + ", y:" + py.toFixed(1) + "}");
+        console.log("[SERVER]     Distance to ray:', " + dist.toFixed(2) + " vs HIT_RADIUS " + HIT_RADIUS);
 
         if (dist <= HIT_RADIUS && t < bestT) {
           bestT = t;
           hitId = id;
-          console.log("[SERVER] ✅ HIT! Setting hitId to " + id);
+          console.log("[SERVER]     ✅ HIT DETECTED! Setting hitId");
+        } else {
+          console.log("[SERVER]     ❌ No hit (dist > HIT_RADIUS or not closest)");
         }
       }
 
