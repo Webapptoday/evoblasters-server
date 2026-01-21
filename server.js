@@ -213,7 +213,7 @@ class MatchmakingRoom extends Room {
 
 class BattleRoom extends Room {
   onCreate(options) {
-    console.log("[BATTLEROOM] Created, matchId:", options?.matchId);
+    console.log("[BATTLEROOM] ⭐ CREATED - roomId:", this.roomId, "matchId:", options?.matchId);
     this.maxClients = 2;
     this.matchId = options?.matchId || "unknown";
     this.readyPlayers = new Set();
@@ -440,6 +440,7 @@ class BattleRoom extends Room {
 
   onJoin(client, options) {
     console.log("[BATTLEROOM]", this.matchId, "Client joined:", client.sessionId);
+    console.log("[BATTLEROOM]", this.matchId, "Join options:", options);
 
     const p = new Player();
     const clean = String(options?.name ?? "Player").trim().slice(0, 16);
@@ -450,7 +451,8 @@ class BattleRoom extends Room {
 
     this.state.players.set(client.sessionId, p);
     
-    console.log("[BATTLEROOM]", this.matchId, "Players in room:", this.state.players.size, "Expected: 2");
+    console.log("[BATTLEROOM]", this.matchId, "Players in room NOW:", Array.from(this.state.players.keys()).join(","));
+    console.log("[BATTLEROOM]", this.matchId, "Total player count:", this.state.players.size, "(Expected: 2)");
   }
 
   onLeave(client) {
