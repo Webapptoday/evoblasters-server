@@ -152,5 +152,7 @@ gameServer.define("battle", BattleRoom);
 
 const PORT = Number(process.env.PORT || 2567);
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`[SERVER] EvoBlasters 1v1 listening on port ${PORT}`);
+  console.log(`[SERVER] ✅ EvoBlasters 1v1 listening on port ${PORT}`);
+  console.log(`[SERVER] WebSocket: wss://evoblasters-server-production.up.railway.app`);
+  console.log(`[SERVER] Health check: GET http://localhost:${PORT}/health`);
 });
