@@ -4,240 +4,23 @@ const { Server, Room } = require("colyseus");
 const { WebSocketTransport } = require("@colyseus/ws-transport");
 const { Schema, type, MapSchema } = require("@colyseus/schema");
 
-/* =========================
-   SCHEMAS
-========================= */
-
-class Player extends Schema {
-  constructor() {
-    super();
-    this.x = 100;
-    this.y = 100;
-    this.hp = 100;
-    this.alive = true;
-    this.name = "Player";
-  }
-}
-
+class Player extends Schema {}
 type("number")(Player.prototype, "x");
 type("number")(Player.prototype, "y");
 type("number")(Player.prototype, "hp");
 type("boolean")(Player.prototype, "alive");
 type("string")(Player.prototype, "name");
 
-class Objective extends Schema {
-  constructor() {
-    super();
-    this.x = 1300; // center of 2600px wide map
-    this.y = 900;  // center of 1800px tall map
-    this.hp = 200;
-    this.alive = true;
-  }
-}
-
-type("number")(Objective.prototype, "x");
-type("number")(Objective.prototype, "y");
-type("number")(Objective.prototype, "hp");
-type("boolean")(Objective.prototype, "alive");
-
-class State extends Schema {
-  constructor() {
-    super();
-    this.players = new MapSchema();
-    this.objective = new Objective();
-  }
-}
-
+class State extends Schema {}
 type({ map: Player })(State.prototype, "players");
-type(Objective)(State.prototype, "objective");
-
-class WaitingPlayer extends Schema {
-  constructor(id, name) {
-    super();
-    this.id = id;
-    this.name = name;
-  }
-}
-
-type("string")(WaitingPlayer.prototype, "id");
-type("string")(WaitingPlayer.prototype, "name");
-
-class MatchmakingState extends Schema {
-  constructor() {
-    super();
-    this.queue = new MapSchema();
-  }
-}
-
-type({ map: WaitingPlayer })(MatchmakingState.prototype, "queue");/* =========================
-   MATCHMAKING ROOM (Lobby)
-========================= */
-
-class MatchmakingRoom extends Room {
-  onCreate(options) {
-    console.log("[MATCHMAKING] Room created");
-    this.maxClients = 1000;
-    
-    this.queue = [];
-    this.waitingPlayers = new Map();
-    this.pendingMatches = new Map();
-
-    // ✅ Set up synced state so clients see who's waiting
-    this.setState(new MatchmakingState());
-
-    this.onMessage("join_queue", (client, data) => {
-      console.log("[MATCHMAKING] Player", client.sessionId, "joining queue:", data.name);
-      
-      const playerData = {
-        id: client.sessionId,
-        name: data.name || "Player",
-        joinedAt: Date.now(),
-      };
-      
-      this.waitingPlayers.set(client.sessionId, playerData);
-      
-      // ✅ Add to synced state
-      this.state.queue.set(client.sessionId, new WaitingPlayer(client.sessionId, data.name || "Player"));
-
-      this.queue.push(client.sessionId);
-      console.log("[MATCHMAKING] Queue size:", this.queue.length);
-      this.tryCreateMatch();
-    });
-
-    this.onMessage("match_accepted", (client, data) => {
-      const { matchId } = data;
-      console.log("[MATCHMAKING] Player", client.sessionId, "accepted match", matchId);
-      
-      if (!this.pendingMatches.has(matchId)) {
-        console.log("[MATCHMAKING] Match", matchId, "not found");
-        return;
-      }
-
-      const match = this.pendingMatches.get(matchId);
-      match.acceptedCount = (match.acceptedCount || 0) + 1;
-
-      console.log("[MATCHMAKING] Match", matchId, "accepted:", match.acceptedCount, "/2");
-
-      if (match.acceptedCount === 2) {
-        console.log("[MATCHMAKING] ✅ Both players accepted! Sending game_start");
-        this.send(match.p1Id, "game_start", { matchId });
-        this.send(match.p2Id, "game_start", { matchId });
-        this.pendingMatches.delete(matchId);
-        this.waitingPlayers.delete(match.p1Id);
-        this.waitingPlayers.delete(match.p2Id);
-      }
-    });
-  }
-
-  tryCreateMatch() {
-    if (this.queue.length >= 2) {
-      const p1Id = this.queue.shift();
-      const p2Id = this.queue.shift();
-      const p1 = this.waitingPlayers.get(p1Id);
-      const p2 = this.waitingPlayers.get(p2Id);
-
-      if (!p1 || !p2) {
-        console.log("[MATCHMAKING] ERROR: Player missing from waiting list");
-        return;
-      }
-
-      const matchId = `match_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      
-      this.pendingMatches.set(matchId, {
-        matchId,
-        p1Id,
-        p2Id,
-        p1Name: p1.name,
-        p2Name: p2.name,
-        createdAt: Date.now(),
-        acceptedCount: 0,
-      });
-
-      console.log("[MATCHMAKING] ✅ Match found!", p1.name, "vs", p2.name, "ID:", matchId);
-      
-      // ✅ Remove from synced queue
-      this.state.queue.delete(p1Id);
-      this.state.queue.delete(p2Id);
-
-      this.send(p1Id, "match_found", { 
-        matchId, 
-        opponent: p2.name,
-        opponentId: p2Id,
-      });
-      this.send(p2Id, "match_found", { 
-        matchId, 
-        opponent: p1.name,
-        opponentId: p1Id,
-      });
-
-      this.clock.setTimeout(() => {
-        if (this.pendingMatches.has(matchId)) {
-          console.log("[MATCHMAKING] Match", matchId, "timed out (no acceptance)");
-          const m = this.pendingMatches.get(matchId);
-          this.pendingMatches.delete(matchId);
-          
-          if (this.clients.find(c => c.sessionId === m.p1Id)) {
-            this.waitingPlayers.set(m.p1Id, { id: m.p1Id, name: m.p1Name, joinedAt: Date.now() });
-            this.queue.push(m.p1Id);
-          }
-          if (this.clients.find(c => c.sessionId === m.p2Id)) {
-            this.waitingPlayers.set(m.p2Id, { id: m.p2Id, name: m.p2Name, joinedAt: Date.now() });
-            this.queue.push(m.p2Id);
-          }
-          this.tryCreateMatch();
-        }
-      }, 30000);
-    }
-  }
-
-  onLeave(client) {
-    console.log("[MATCHMAKING] Player left:", client.sessionId);
-    this.queue = this.queue.filter(id => id !== client.sessionId);
-    this.waitingPlayers.delete(client.sessionId);
-    
-    // ✅ Remove from synced state
-    this.state.queue.delete(client.sessionId);
-    
-    for (const [matchId, match] of this.pendingMatches.entries()) {
-      if (match.p1Id === client.sessionId || match.p2Id === client.sessionId) {
-        console.log("[MATCHMAKING] Removing player from pending match", matchId);
-        this.pendingMatches.delete(matchId);
-      }
-    }
-  }
-}
-
-/* =========================
-   ROOM
-========================= */
 
 class BattleRoom extends Room {
-  onCreate(options) {
-    console.log("[BATTLEROOM] ⭐ CREATED - roomId:", this.roomId, "matchId:", options?.matchId);
+  onCreate() {
+    console.log("[BattleRoom] Created - roomId:", this.roomId);
     this.maxClients = 2;
-    this.matchId = options?.matchId || "unknown";
-    this.readyPlayers = new Set();
-    this.gameStarted = false;
-    
     this.setState(new State());
     this.setPatchRate(50);
 
-    this.onMessage("game_ready", (client, data) => {
-      console.log("[BATTLEROOM]", this.matchId, "Player", client.sessionId, "ready");
-      console.log("[BATTLEROOM]", this.matchId, "Current players in room:", this.state.players.size);
-      this.readyPlayers.add(client.sessionId);
-      
-      // ✅ Only start game if BOTH players in room AND both ready
-      if (this.readyPlayers.size === 2 && this.state.players.size === 2 && !this.gameStarted) {
-        console.log("[BATTLEROOM]", this.matchId, "✅ Both players ready, starting game!");
-        this.gameStarted = true;
-        this.broadcast("game_can_start", { timestamp: Date.now() });
-      } else {
-        console.log("[BATTLEROOM]", this.matchId, "⏳ Waiting for both players. Ready:", this.readyPlayers.size, "In room:", this.state.players.size);
-      }
-    });
-
-    /* ---- movement ---- */
     this.onMessage("move", (client, data) => {
       const p = this.state.players.get(client.sessionId);
       if (!p || !p.alive) return;
@@ -245,302 +28,129 @@ class BattleRoom extends Room {
       if (typeof data?.y === "number") p.y = data.y;
     });
 
-    /* ---- set name ---- */
-    this.onMessage("set_name", (client, data) => {
-      const p = this.state.players.get(client.sessionId);
-      if (!p) return;
-      const clean = String(data?.name ?? "Player").trim().slice(0, 16);
-      p.name = clean || "Player";
-    });
-
-    /* ---- hit detection (client-side hitscan validation) ---- */
-    this.onMessage("hit", (client, data) => {
-      console.log("[SERVER] Hit message from", client.sessionId, "data:", data);
-      const shooter = this.state.players.get(client.sessionId);
-      const target = this.state.players.get(data?.targetId);
-
-      if (!shooter || !target || !shooter.alive || !target.alive) {
-        console.log("[SERVER] Invalid hit (shooter or target dead/missing)");
-        return;
-      }
-
-      const dmg = Math.max(1, Math.min(50, data?.dmg || 10));
-      target.hp = Math.max(0, target.hp - dmg);
-      console.log("[SERVER] Hit! Target", data.targetId, "took", dmg, "damage, HP now:", target.hp);
-
-      if (target.hp <= 0) {
-        target.alive = false;
-        console.log("[SERVER] Target died, respawning in 2s");
-
-        // respawn after 2s
-        this.clock.setTimeout(() => {
-          target.hp = 100;
-          target.alive = true;
-          target.x = 100 + Math.random() * 500;
-          target.y = 100 + Math.random() * 300;
-          console.log("[SERVER] Target respawned");
-        }, 2000);
-      }
-
-      // Broadcast hit to all clients for visual feedback
-      this.broadcast("hit_result", {
-        targetId: data.targetId,
-        dmg: dmg,
-        newHp: target.hp,
-      });
-    });
-
-    /* ---- game start validation (must have 2+ players) ---- */
-    this.onMessage("start_game", (client, data) => {
-      const playerCount = this.state.players.size;
-      console.log("[SERVER] Game start requested by", client.sessionId, "players:", playerCount);
-
-      if (playerCount < 2) {
-        console.log("[SERVER] ❌ BLOCKED - Cannot start with", playerCount, "player(s). Need 2+");
-        this.send(client, "start_blocked", { 
-          message: `Need 2 players to start. Currently: ${playerCount}` 
-        });
-        return;
-      }
-
-      console.log("[SERVER] ✅ APPROVED - Starting game with", playerCount, "players");
-      this.broadcast("game_start", { timestamp: Date.now() });
-    });
-
-    /* ---- shooting ---- */
     this.onMessage("shoot", (client, data) => {
-      console.log("[SERVER] ===== SHOOT MESSAGE RECEIVED =====");
-      console.log("[SERVER] Client:", client.sessionId.substring(0, 8));
-      console.log("[SERVER] Raw data from client:", data);
-      
       const shooter = this.state.players.get(client.sessionId);
-      if (!shooter || !shooter.alive) {
-        console.log("[SERVER] ❌ Shooter not found or not alive");
-        return;
-      }
+      if (!shooter || !shooter.alive) return;
 
-      console.log("[SERVER] ✅ Shooter found, position on server:", { x: shooter.x, y: shooter.y });
-      console.log("[SERVER] All players in room:");
-      for (const [id, p] of this.state.players.entries()) {
-        console.log("[SERVER]   ", id === client.sessionId ? "→ SELF" : "   OPPONENT", { x: p.x, y: p.y, alive: p.alive, hp: p.hp });
-      }
-
-      // Use server's position, not client's (client x,y is unreliable due to latency)
-      const x = shooter.x;
-      const y = shooter.y;
+      const x = Number(data?.x);
+      const y = Number(data?.y);
       const dx = Number(data?.dx);
       const dy = Number(data?.dy);
 
-      console.log("[SERVER] Using server position for hitscan:", { x, y });
-      console.log("[SERVER] Direction from client:", { dx, dy });
-      console.log("[SERVER] All values finite?", [x, y, dx, dy].every(Number.isFinite));
-      if (![x, y, dx, dy].every(Number.isFinite)) {
-        console.log("[SERVER] ❌ Invalid shoot data, returning");
-        return;
-      }
+      if (![x, y, dx, dy].every(Number.isFinite)) return;
 
-      // normalize direction
       const len = Math.hypot(dx, dy) || 1;
       const dirx = dx / len;
       const diry = dy / len;
 
       const MAX_RANGE = 700;
-      const HIT_RADIUS = 50;
-      const DAMAGE = 10;
-
-      console.log("[SERVER] Normalized direction:", { dirx, diry });
-      console.log("[SERVER] Direction magnitude was:", len);
+      const HIT_RADIUS = 22;
+      const BULLET_DAMAGE = 10;
 
       let hitId = null;
-      let bestT = Infinity;
+      let hitHp = null;
 
-      console.log("[SERVER] ⚔️ Starting hitscan from", { x, y }, "direction", { dirx, diry });
-      console.log("[SERVER] Checking " + (this.state.players.size - 1) + " other players");
-      
-      // simple hitscan ray
       for (const [id, p] of this.state.players.entries()) {
-        if (id === client.sessionId) {
-          console.log("[SERVER]   [SKIP] Player is self");
-          continue;
-        }
-        if (!p.alive) {
-          console.log("[SERVER]   [SKIP] Player " + id.substring(0, 8) + " is dead");
-          continue;
-        }
+        if (id === client.sessionId) continue;
+        if (!p.alive) continue;
 
         const vx = p.x - x;
         const vy = p.y - y;
         const t = vx * dirx + vy * diry;
 
-        console.log("[SERVER]   Checking opponent " + id.substring(0, 8));
-        console.log("[SERVER]     Position: {x:" + p.x.toFixed(1) + ", y:" + p.y.toFixed(1) + "}");
-        console.log("[SERVER]     Vector to opponent: {x:" + vx.toFixed(1) + ", y:" + vy.toFixed(1) + "}");
-        console.log("[SERVER]     Dot product (t):", t.toFixed(2));
-
-        if (t < 0 || t > MAX_RANGE) {
-          console.log("[SERVER]     ❌ OUT OF RANGE (t < 0 or t > " + MAX_RANGE + ")");
-          continue;
-        }
+        if (t < 0 || t > MAX_RANGE) continue;
 
         const px = x + dirx * t;
         const py = y + diry * t;
         const dist = Math.hypot(p.x - px, p.y - py);
 
-        console.log("[SERVER]     Ray point at t: {x:" + px.toFixed(1) + ", y:" + py.toFixed(1) + "}");
-        console.log("[SERVER]     Distance to ray:', " + dist.toFixed(2) + " vs HIT_RADIUS " + HIT_RADIUS);
-
-        if (dist <= HIT_RADIUS && t < bestT) {
-          bestT = t;
+        if (dist <= HIT_RADIUS) {
           hitId = id;
-          console.log("[SERVER]     ✅ HIT DETECTED! Setting hitId");
-        } else {
-          console.log("[SERVER]     ❌ No hit (dist > HIT_RADIUS or not closest)");
-        }
-      }
+          p.hp = Math.max(0, p.hp - BULLET_DAMAGE);
+          hitHp = p.hp;
+          
+          console.log(`[SHOT] ${client.sessionId.slice(0, 8)} hit ${hitId.slice(0, 8)} hp=${hitHp}`);
 
-      // Check if hit the objective
-      let hitObjective = false;
-      if (this.state.objective && this.state.objective.alive) {
-        const ox = this.state.objective.x - x;
-        const oy = this.state.objective.y - y;
-        const ot = ox * dirx + oy * diry;
-
-        if (ot >= 0 && ot <= MAX_RANGE && ot < bestT) {
-          const px = x + dirx * ot;
-          const py = y + diry * ot;
-          const dist = Math.hypot(this.state.objective.x - px, this.state.objective.y - py);
-          const OBJECTIVE_RADIUS = 40;
-
-          console.log("[SERVER] Objective check - dist:", dist, "HIT?", dist <= OBJECTIVE_RADIUS);
-
-          if (dist <= OBJECTIVE_RADIUS) {
-            hitObjective = true;
-            bestT = ot;
-            hitId = null; // Don't hit player if objective is closer
+          if (p.hp <= 0) {
+            p.alive = false;
+            this.clock.setTimeout(() => {
+              p.hp = 100;
+              p.alive = true;
+              p.x = 100 + Math.random() * 500;
+              p.y = 100 + Math.random() * 300;
+              console.log(`[RESPAWN] ${hitId.slice(0, 8)}`);
+            }, 2000);
           }
+          break;
         }
       }
 
-      let hitHp = null;
-
-      if (hitObjective) {
-        this.state.objective.hp = Math.max(0, this.state.objective.hp - DAMAGE);
-        hitHp = this.state.objective.hp;
-        console.log("[SERVER] HIT OBJECTIVE! HP now:", hitHp);
-
-        if (this.state.objective.hp <= 0) {
-          this.state.objective.alive = false;
-          console.log("[SERVER] 🎉 Objective destroyed! Spawning potion at center");
-
-          // Notify all players that objective is destroyed and potion spawned
-          this.broadcast("objective_destroyed", {
-            potionX: this.state.objective.x,
-            potionY: this.state.objective.y,
-          });
-        }
-      } else if (hitId) {
-        const target = this.state.players.get(hitId);
-        target.hp = Math.max(0, target.hp - DAMAGE);
-        hitHp = target.hp;
-        console.log("[SERVER] HIT! Target", hitId, "HP now:", hitHp);
-
-        if (target.hp <= 0) {
-          target.alive = false;
-          console.log("[SERVER] Target", hitId, "is dead, respawning in 2s");
-
-          // respawn after 2s
-          this.clock.setTimeout(() => {
-            target.hp = 100;
-            target.alive = true;
-            target.x = 100 + Math.random() * 500;
-            target.y = 100 + Math.random() * 300;
-            console.log("[SERVER] Respawned", hitId);
-          }, 2000);
-        }
-      } else {
-        console.log("[SERVER] ❌ No hit detected");
-      }
-
-      // broadcast for visuals
-      console.log("[SERVER] 📡 Broadcasting shot with hitId: " + hitId + " to " + this.clients.length + " clients");
       this.broadcast("shot", {
         fromId: client.sessionId,
-        x,
-        y,
-        dx: dirx,
-        dy: diry,
-        hitId,
-        hitHp,
-        hitObjective,
+        x, y, dx: dirx, dy: diry,
+        hitId, hitHp,
       });
-      console.log("[SERVER] Shot broadcast completed");
     });
   }
 
   onJoin(client, options) {
-    console.log("[BATTLEROOM]", this.matchId, "Client joined:", client.sessionId);
-    console.log("[BATTLEROOM]", this.matchId, "Join options:", options);
-
+    const name = String(options?.name || "Player").slice(0, 16) || "Player";
     const p = new Player();
-    const clean = String(options?.name ?? "Player").trim().slice(0, 16);
-    p.name = clean || "Player";
-
+    p.name = name;
     p.x = 100 + Math.random() * 500;
     p.y = 100 + Math.random() * 300;
+    p.hp = 100;
+    p.alive = true;
 
     this.state.players.set(client.sessionId, p);
     
-    console.log("[BATTLEROOM]", this.matchId, "Players in room NOW:", Array.from(this.state.players.keys()).join(","));
-    console.log("[BATTLEROOM]", this.matchId, "Total player count:", this.state.players.size, "(Expected: 2)");
+    console.log(`[JOIN] ${client.sessionId.slice(0, 8)} (${name}) - total: ${this.state.players.size}/2`);
+
+    this.broadcast("player_joined", { id: client.sessionId, name });
+
+    if (this.state.players.size === 2) {
+      console.log("[MATCH_START] Both players in room");
+      this.broadcast("match_start", { timestamp: Date.now() });
+      this.locked = true;
+    }
   }
 
   onLeave(client) {
-    console.log("Client left:", client.sessionId);
+    console.log(`[LEAVE] ${client.sessionId.slice(0, 8)}`);
     this.state.players.delete(client.sessionId);
+
+    this.broadcast("player_left", { id: client.sessionId });
+
+    if (this.state.players.size < 2) {
+      this.locked = false;
+      console.log("[WAITING] Awaiting opponent...");
+      this.broadcast("waiting_for_opponent", {});
+    }
   }
 }
-
-/* =========================
-   SERVER
-========================= */
 
 const app = express();
 app.set("trust proxy", true);
 
-// ✅ Enable CORS for all origins
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Upgrade, Connection");
-  res.header("Access-Control-Allow-Credentials", "true");
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
 
-app.get("/", (_, res) => res.status(200).send("EvoBlasters server running"));
+app.get("/", (_, res) => res.status(200).send("EvoBlasters 1v1 server running"));
 app.get("/health", (_, res) => res.status(200).json({ ok: true }));
 
 const server = http.createServer(app);
-
 const gameServer = new Server({
   transport: new WebSocketTransport({ server }),
 });
 
-// ✅ Limit matchmaking room to only 1 instance
-gameServer.define("matchmaking", MatchmakingRoom, {
-  maxInstances: 1  // Only one matchmaking room
-});
-
-// ✅ Battle rooms - filterBy ensures both players with same matchId join same room
-gameServer.define("battle", BattleRoom, {
-  filterBy: ["matchId"]
-});
+gameServer.define("battle", BattleRoom);
 
 const PORT = Number(process.env.PORT || 2567);
-
 server.listen(PORT, "0.0.0.0", () => {
-  console.log("listening on", PORT);
-  console.log("WebSocket URL: wss://evoblasters-server-production.up.railway.app");
+  console.log(`[SERVER] EvoBlasters 1v1 listening on port ${PORT}`);
 });
