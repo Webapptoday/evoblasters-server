@@ -123,8 +123,10 @@ class BattleRoom extends Room {
     console.log(`[LEAVE] ${client.sessionId.slice(0, 8)}`);
     this.state.players.delete(client.sessionId);
 
-    if (this.clients.length < 2) {
-      console.log("[ROOM_ENDING] 1v1 ended - player left");
+    // Only end room if BOTH players were in it and one left (match in progress)
+    // Don't disconnect if waiting for second player
+    if (this.clients.length === 0) {
+      console.log("[ROOM_ENDING] Room empty - all players left");
       this.disconnect();
     }
   }
@@ -206,21 +208,27 @@ gameServer.define("battle", BattleRoom);
 
 app.get("/matchmake", async (req, res) => {
   try {
+    // Check if we have a waiting room that's still valid
     if (waitingRoomId) {
-      const room = gameServer.rooms.get(waitingRoomId);
-      if (room && room.clients.length < 2 && !room.locked) {
-        const id = waitingRoomId;
-        waitingRoomId = null;
-        console.log(`[MATCHMAKE] Reusing waiting room: ${id.slice(0, 8)}`);
-        return res.json({ roomId: id });
+      try {
+        const room = gameServer.rooms.get(waitingRoomId);
+        if (room && room.clients && room.clients.length < 2 && !room.locked) {
+          console.log(`[MATCHMAKE] Reusing waiting room ${waitingRoomId.slice(0, 8)} (clients: ${room.clients.length})`);
+          const id = waitingRoomId;
+          // Don't reset waitingRoomId yet - let the second player get it
+          return res.json({ roomId: id });
+        }
+      } catch (e) {
+        console.log(`[MATCHMAKE] Waiting room ${waitingRoomId.slice(0, 8)} no longer valid, creating new`);
       }
       waitingRoomId = null;
     }
 
+    // Create a new waiting room
     const room = await gameServer.createRoom("battle", {});
     waitingRoomId = room.roomId;
-
-    console.log(`[MATCHMAKE] Created new room: ${room.roomId.slice(0, 8)}`);
+    console.log(`[MATCHMAKE] Created new waiting room: ${room.roomId.slice(0, 8)}`);
+    
     return res.json({ roomId: room.roomId });
   } catch (e) {
     console.error("[MATCHMAKE_ERROR]", e.message);
