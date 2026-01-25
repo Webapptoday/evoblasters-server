@@ -20,7 +20,12 @@ type("number")(Player.prototype, "hp");
 type("boolean")(Player.prototype, "alive");
 type("string")(Player.prototype, "name");
 
-class State extends Schema {}
+class State extends Schema {
+  constructor() {
+    super();
+    this.players = new MapSchema();
+  }
+}
 type({ map: Player })(State.prototype, "players");
 
 class BattleRoom extends Room {
