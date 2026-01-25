@@ -4,7 +4,16 @@ const { Server, Room } = require("colyseus");
 const { WebSocketTransport } = require("@colyseus/ws-transport");
 const { Schema, type, MapSchema } = require("@colyseus/schema");
 
-class Player extends Schema {}
+class Player extends Schema {
+  constructor() {
+    super();
+    this.x = 100;
+    this.y = 100;
+    this.hp = 100;
+    this.alive = true;
+    this.name = "Player";
+  }
+}
 type("number")(Player.prototype, "x");
 type("number")(Player.prototype, "y");
 type("number")(Player.prototype, "hp");
@@ -94,7 +103,10 @@ class BattleRoom extends Room {
   }
 
   onJoin(client, options) {
+    console.log(`[JOIN] Client ${client.sessionId.slice(0, 8)} joining...`);
+    
     const name = String(options?.name || "Player").slice(0, 16) || "Player";
+    
     const p = new Player();
     p.name = name;
     p.x = 100 + Math.random() * 500;
